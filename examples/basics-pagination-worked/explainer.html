@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pagination Worked Explainer</title>
+<!--
+  3Blue1Brown-style explainer for the "Pagination, worked end to end" sheet (source.pdf).
+  One idea: offset remembers a position, a cursor remembers an item. One feed carried through
+  (T1..T6 three-per-page list, then the real /v1/feed call with tweet 9142).
+  Every frame is a pure function of time: renderAt(t). Cue ids are the line ids in script.json;
+  timings come from timeline.js. Open the file to preview with narration (click or space).
+-->
+<style>
+:root{--bg:#0b0b0d;--white:#f2f2f2;--grey:#8c8c8c;--blue:#58c4dd;--yellow:#f7d84a;--green:#83c167;--red:#fc6255;--teal:#5cd0b3}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:#000;overflow:hidden}
+#stage{position:absolute;left:0;top:0;width:1920px;height:1080px;background:var(--bg);transform-origin:0 0;overflow:hidden;
+  color:var(--white);font-family:"STIX Two Text","STIXGeneral","Charter","Georgia",serif}
+#sv{position:absolute;left:0;top:0}
+#brand{position:absolute;left:60px;top:34px;font:600 18px "Avenir Next","Helvetica Neue",sans-serif;letter-spacing:.18em;color:#5c5c5c}
+#chip{position:absolute;right:60px;top:30px;font:600 22px "Avenir Next","Helvetica Neue",sans-serif;letter-spacing:.06em;color:var(--blue)}
+#cap{position:absolute;left:200px;right:200px;bottom:26px;height:80px;display:flex;align-items:center;justify-content:center;
+  text-align:center;font:28px "Avenir Next","Helvetica Neue",sans-serif;color:#a4a4a4}
+#bar{position:absolute;left:0;bottom:0;height:4px;background:var(--blue);opacity:.7;width:0}
+#hint{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font:22px sans-serif;color:#fff;background:#000a;padding:14px 22px;border-radius:12px;z-index:9}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="brand">BASICS · PAGINATION, WORKED</div>
+  <div id="chip"></div>
+  <svg id="sv" width="1920" height="1080"><g id="g"></g></svg>
+  <div id="cap"></div>
+  <div id="bar"></div>
+</div>
+<div id="hint" hidden>Click or press space to play</div>
+<script src="timeline.js"></script>
+<script>
+const TL = window.TIMELINE;
+const RENDER = location.search.includes('render');
+const $ = id => document.getElementById(id);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = p => 1 - Math.pow(1 - clamp(p), 3);
+const eio = p => { p = clamp(p); return p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; };
+const lerp = (a, b, p) => a + (b - a) * p;
+const WHITE = '#f2f2f2', GREY = '#8c8c8c', BLUE = '#58c4dd', YELLOW = '#f7d84a', GREEN = '#83c167', RED = '#fc6255', TEAL = '#5cd0b3', INK = '#141416', DIM = '#2f4a52';
+const SERIF = `'STIX Two Text','STIXGeneral','Charter','Georgia',serif`, MONO = 'Menlo,monospace', SANS = `'Avenir Next','Helvetica Neue',sans-serif`;
+const cues = {};
+TL.scenes.forEach(sc => sc.lines.forEach(l => cues[l.id] = l));
+const T = id => cues[id].start, TE = id => cues[id].end, F = (id, f) => T(id) + f * (TE(id) - T(id));
+const fin = (t, t0, d = .5) => ease((t - t0) / d);
+const fout = (t, t1, d = .35) => 1 - ease((t - t1 + d) / d);
+// visible from a to b (b = start of the next phase)
+const win = (t, a, b) => fin(t, a - .3, .4) * (b === undefined ? 1 : (1 - fin(t, b - .45, .35)));
+const n1 = v => (+v).toFixed(1);
+const tx = (x, y, str, o = {}) => `<text x="${n1(x)}" y="${n1(y)}" font-size="${o.size || 28}" fill="${o.fill || WHITE}" text-anchor="${o.anchor || 'start'}"`
+  + ` font-family="${o.mono ? MONO : o.sans ? SANS : SERIF}"${o.italic ? ' font-style="italic"' : ''}${o.bold ? ' font-weight="700"' : ''}${o.ls ? ` letter-spacing="${o.ls}"` : ''} xml:space="preserve" opacity="${(o.op ?? 1).toFixed(2)}">${str}</text>`;
+const ln = (x1, y1, x2, y2, stroke, w = 3, op = 1, dash = '') => `<line x1="${n1(x1)}" y1="${n1(y1)}" x2="${n1(x2)}" y2="${n1(y2)}" stroke="${stroke}" stroke-width="${w}" opacity="${op.toFixed(2)}" stroke-linecap="round"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+const box = (x, y, w, h, o = {}) => `<rect x="${n1(x)}" y="${n1(y)}" width="${n1(Math.max(w, 0))}" height="${n1(Math.max(h, 0))}" rx="${o.rx ?? 10}" fill="${o.fill || 'none'}" stroke="${o.stroke || 'none'}" stroke-width="${o.w ?? 3}" opacity="${(o.op ?? 1).toFixed(2)}"${o.dash ? ` stroke-dasharray="${o.dash}"` : ''}/>`;
+const drawn = (d, p, stroke, w = 3, op = 1) => `<path d="${d}" pathLength="1" stroke-dasharray="1" stroke-dashoffset="${(1 - clamp(p)).toFixed(4)}" fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round" opacity="${op.toFixed(2)}"/>`;
+const grp = (op, inner) => op <= 0 ? '' : `<g opacity="${op.toFixed(3)}">${inner}</g>`;
+const arrow = (x1, y, x2, col, op = 1) => grp(op, ln(x1, y, x2 - (x2 > x1 ? 6 : -6), y, col, 3) + `<path d="M${x2} ${y}l${x2 > x1 ? -16 : 16} -9v18z" fill="${col}"/>`);
+const varrow = (x, y1, y2, col, op = 1) => grp(op, ln(x, y1, x, y2 - 6, col, 3) + `<path d="M${x} ${y2}l-9 -16h18z" fill="${col}"/>`);
+// a small tag under the brand line: where this frame's facts come from
+const tag = (str, op, col = '#6d6d6d') => tx(60, 84, str, { size: 19, sans: true, fill: col, op, ls: '.04em' });
+// a tweet tile
+const tile = (cx, cy, label, o = {}) => box(cx - (o.w || 110) / 2, cy - 33, o.w || 110, 66, { fill: o.bg || INK, stroke: o.stroke || '#555', w: 2.5, rx: 10, op: o.op ?? 1 })
+  + tx(cx, cy + 10, label, { size: o.size || 28, mono: true, anchor: 'middle', fill: o.fill || WHITE, op: o.op ?? 1 });
+// a code panel: lines = [[text, t0, fill, note]]; note in grey italic at noteX
+function code(t, x, y, w, lines, o = {}) {
+  const lh = o.lh || 40, size = o.size || 25, pad = 26;
+  const h = pad * 2 + lh * lines.length - 12;
+  const op = o.op ?? fin(t, lines[0][1] - .1);
+  let s = box(x, y, w, h, { fill: INK, stroke: o.stroke || '#3a3a3e', w: 2, rx: 12, op });
+  if (o.title) s += tx(x + 4, y - 14, o.title, { size: 20, sans: true, ls: '.12em', fill: o.tcol || GREY, op });
+  lines.forEach(([str, t0, fill, note], i) => {
+    const yy = y + pad + 20 + i * lh, a = fin(t, t0, .45);
+    s += tx(x + 26, yy, str, { size, mono: true, fill: fill || WHITE, op: a });
+    if (note) s += tx(x + (o.noteX || 560), yy, note, { size: 22, italic: true, fill: o.ncol || GREY, op: fin(t, t0 + .15, .45) });
+  });
+  return s;
+}
+
+// ---------------------------------------------------------------- 0 · hook: one list, one insert
+const X0 = 560, DX = 150;
+function feedRows(t, cfg) {
+  // cfg: y positions and cue times; shared by the hook and the cursor replay
+  const { x0, dx, y1, y2, y3, w, tA, tB, tC, mode } = cfg;
+  let s = '';
+  const lab = (y, a, b, op) => tx(x0 - 80 - w / 2, y - 4, a, { size: 22, sans: true, ls: '.1em', fill: GREY, anchor: 'end', op }) + tx(x0 - 80 - w / 2, y + 24, b, { size: 22, sans: true, ls: '.1em', fill: GREY, anchor: 'end', op });
+  // row 1: page 1
+  const a1 = fin(t, tA);
+  s += lab(y1, 'PAGE 1', mode === 'offset' ? 'OFFSET=0' : 'NO CURSOR', a1);
+  for (let i = 0; i < 6; i++) {
+    const pg = i < 3 && t > tA + .6;
+    s += tile(x0 + i * dx, y1, 'T' + (i + 1), { w, op: fin(t, tA + i * .12, .35), stroke: pg ? YELLOW : '#555', fill: pg ? YELLOW : WHITE });
+  }
+  // row 2: a new tweet arrives at the head, everything slides one place
+  const a2 = fin(t, tB), sl = eio((t - tB - .4) / .9);
+  s += lab(y2, 'NEW TWEET', 'ARRIVES', a2);
+  if (a2 > 0) {
+    for (let i = 0; i < 6; i++) s += tile(x0 + (i + sl) * dx, y2, 'T' + (i + 1), { w, op: a2 * (i === 5 ? 1 - .7 * sl : 1) });
+    s += tile(x0, y2, 'NEW', { w, op: fin(t, tB + .9, .4), stroke: TEAL, fill: TEAL });
+  }
+  // row 3: page 2
+  const a3 = fin(t, tC);
+  if (a3 > 0) {
+    s += lab(y3, 'PAGE 2', mode === 'offset' ? 'OFFSET=3' : 'AFTER T3', a3);
+    if (mode === 'offset') {
+      // "skip 3" counts positions: slots 0-2 skipped, slots 3-5 hold T3 T4 T5
+      for (let i = 0; i < 3; i++) s += tile(x0 + i * dx, y3, '·', { w, op: a3 * .6, fill: GREY });
+      ['T3', 'T4', 'T5'].forEach((l, i) => s += tile(x0 + (i + 3) * dx, y3, l, { w, op: fin(t, tC + .3 + i * .12, .35), stroke: i === 0 ? RED : BLUE, fill: i === 0 ? RED : BLUE }));
+      s += tx(x0 + 6 * dx - 30, y3 + 10, 'T3 arrives twice', { size: 32, italic: true, fill: RED, op: fin(t, tC + 1.1) });
+      // ring the first T3 too
+      s += box(x0 + 2 * dx - w / 2 - 6, y1 - 39, w + 12, 78, { stroke: RED, w: 2.5, rx: 13, op: fin(t, tC + 1.1) });
+    } else {
+      // "after T3" names an item: the rows older than T3, wherever they now sit
+      for (let i = 0; i < 3; i++) s += tile(x0 + i * dx, y3, '·', { w, op: a3 * .6, fill: GREY });
+      ['T4', 'T5', 'T6'].forEach((l, i) => s += tile(x0 + (i + 3) * dx, y3, l, { w, op: fin(t, tC + .3 + i * .12, .35), stroke: YELLOW, fill: YELLOW }));
+    }
+  }
+  return s;
+}
+function actHook(t) {
+  const v = win(t, .3, T('o0'));
+  if (v <= 0) return '';
+  let s = tag('FROM THE SHEET · P1', fin(t, .4));
+  s += tx(960, 190, 'Three tweets per page', { size: 36, italic: true, fill: GREY, anchor: 'middle', op: fin(t, F('h0', .05)) });
+  s += feedRows(t, { x0: X0, dx: DX, y1: 290, y2: 410, y3: 530, w: 110, tA: F('h0', .3), tB: F('h1', .05), tC: F('h2', .1), mode: 'offset' });
+  s += tx(960, 650, 'delete one instead: a tweet slides from position 4 to 3, past you · never shown', { size: 30, italic: true, fill: BLUE, anchor: 'middle', op: fin(t, F('h3', .1)) });
+  // the one idea
+  s += tx(960, 760, 'offset remembers a <tspan fill="' + BLUE + '">position</tspan>', { size: 50, anchor: 'middle', op: fin(t, F('h4', .3)) });
+  s += tx(960, 830, 'a cursor remembers an <tspan fill="' + YELLOW + '">item</tspan>', { size: 50, anchor: 'middle', op: fin(t, F('h4', .7)) });
+  s += tx(960, 912, 'Positions move. Items don’t.', { size: 44, italic: true, anchor: 'middle', fill: YELLOW, op: fin(t, T('h5')) });
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 1 · offset
+function actOffset(t) {
+  const v = win(t, T('o0'), T('c0'));
+  if (v <= 0) return '';
+  const p2 = t >= F('o3', .02);           // page two swaps the numbers in place
+  let s = tag('FROM THE SHEET · P2', 1);
+  s += tx(120, 118, 'OFFSET', { size: 24, sans: true, ls: '.16em', fill: BLUE, op: fin(t, T('o0')) }) + tx(260, 118, 'rejected', { size: 24, italic: true, fill: GREY, op: fin(t, T('o0')) });
+  const off = p2 ? '50' : '0';
+  s += code(t, 120, 180, 900, [[`GET /v1/feed?offset=<tspan fill="${p2 ? BLUE : WHITE}">${off}</tspan>&amp;limit=50`, F('o0', .3)]], { title: 'HTTP' });
+  s += code(t, 120, 330, 900, [
+    ['SELECT tweet_id, author_id, text, ts', F('o1', .1)],
+    ['FROM   tweets', F('o1', .2)],
+    ['WHERE  author_id IN (…followees…)', F('o1', .3)],
+    ['ORDER  BY ts DESC', F('o1', .45)],
+    [`LIMIT  50 OFFSET <tspan fill="${p2 ? BLUE : YELLOW}">${off}</tspan>;`, F('o1', .7)],
+  ], { title: 'SQL' });
+  s += tx(120, 640, 'the client must remember a number, and add 50 each time', { size: 30, italic: true, fill: GREY, op: fin(t, F('o2', .2)) });
+  // number counter the client carries
+  s += grp(fin(t, F('o2', .4)), box(120, 676, 300, 70, { stroke: BLUE, fill: INK, w: 2, rx: 10 }) + tx(140, 722, 'offset = ' + (p2 ? '50' : '0'), { size: 30, mono: true, fill: BLUE }) + tx(450, 722, '+50 →', { size: 30, mono: true, fill: GREY }));
+  s += tx(120, 810, '"total": <tspan fill="${BLUE}">4318902</tspan>', { size: 28, mono: true, fill: WHITE, op: fin(t, F('o2b', .05)) })
+    + tx(480, 810, '← COUNT(*) on a sharded table: a scatter-gather', { size: 24, italic: true, fill: GREY, op: fin(t, F('o2b', .35)) });
+  // right: the window drifted
+  s += tx(1500, 220, '“skip 50” meant one set of rows then,', { size: 32, italic: true, anchor: 'middle', fill: WHITE, op: fin(t, F('o3', .35)) })
+    + tx(1500, 262, 'another set now', { size: 32, italic: true, anchor: 'middle', fill: WHITE, op: fin(t, F('o3', .7)) });
+  s += tx(1500, 340, 'The data shifts under the reader.', { size: 40, anchor: 'middle', fill: BLUE, op: fin(t, T('o4')) });
+  // right: rows read vs rows returned
+  const BX = 1100, BW = 760;
+  const r1 = fin(t, F('o5', .15));
+  if (r1 > 0) {
+    s += tx(BX, 430, 'page 2 · offset 50', { size: 26, italic: true, fill: GREY, op: r1 });
+    const w100 = BW * 100 / 2000 * 6;   // drawn larger than scale so 100 rows are visible; page 40 bar below is to scale
+    s += box(BX, 448, w100 * eio((t - F('o5', .2)) / .6), 40, { fill: '#3a3a3e', rx: 4, op: r1 });
+    s += box(BX + w100 / 2, 448, w100 / 2 * fin(t, F('o5', .7)), 40, { fill: BLUE, rx: 4, op: r1 });
+    s += tx(BX + w100 + 20, 478, 'reads 100 · discards 50', { size: 26, fill: WHITE, op: fin(t, F('o5', .7)) });
+  }
+  const r2 = fin(t, F('o6', .05));
+  if (r2 > 0) {
+    s += tx(BX, 560, 'page 40', { size: 26, italic: true, fill: GREY, op: r2 });
+    s += box(BX, 578, BW * eio((t - F('o6', .1)) / 1), 40, { fill: '#3a3a3e', rx: 4, op: r2 });
+    s += box(BX + BW - BW * 50 / 2000, 578, BW * 50 / 2000, 40, { fill: BLUE, rx: 2, op: fin(t, F('o6', .7)) });
+    s += tx(BX, 662, 'reads 2,000 rows to hand back 50', { size: 30, fill: WHITE, op: fin(t, F('o6', .6)) });
+  }
+  // analogy: the third hook
+  const a = fin(t, T('o7'));
+  if (a > 0) {
+    const ins = eio((t - F('o7', .5)) / .8), HX = 1160, HY = 770, HD = 120;
+    const coats = [GREY, '#a07c5a', BLUE, '#7a6aa8', '#5c8a5c'];
+    let h = ln(HX - 60, HY, HX + 5 * HD + 20, HY, '#666', 4) + tx(HX - 60, HY - 26, 'analogy', { size: 20, sans: true, ls: '.1em', fill: '#6d6d6d' });
+    // new hook by the door slides in at the left
+    const shift = ins * HD;
+    coats.forEach((c, i) => {
+      const cx = HX + i * HD + shift;
+      h += `<circle cx="${n1(cx)}" cy="${HY}" r="7" fill="#888"/>` + `<path d="M${n1(cx - 30)} ${HY + 14}h60l10 90h-80z" fill="${c}" opacity=".85"/>`;
+    });
+    h += grp(ins, `<circle cx="${HX}" cy="${HY}" r="7" fill="#888"/><path d="M${HX - 30} ${HY + 14}h60l10 90h-80z" fill="#c45a5a" opacity=".85"/>`);
+    // "the third hook" always points at position 3
+    const px = HX + 2 * HD;
+    h += varrow(px, HY - 80, HY - 16, YELLOW) + tx(px + 20, HY - 50, 'the third hook', { size: 26, italic: true, fill: YELLOW });
+    h += tx(HX + 2.5 * HD, HY + 150, 'add a hook by the door: wrong coat', { size: 28, italic: true, anchor: 'middle', fill: GREY, op: fin(t, F('o7', .7)) });
+    s += grp(a, h);
+  }
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 2 · cursor
+function actCursor(t) {
+  const v = win(t, T('c0'), T('l0'));
+  if (v <= 0) return '';
+  let s = '';
+  // phase A: first page (c0..c3)
+  const A = win(t, T('c0'), T('c4'));
+  if (A > 0) {
+    let a = tag('FROM THE SHEET · P2', 1)
+      + tx(120, 118, 'CURSOR', { size: 24, sans: true, ls: '.16em', fill: YELLOW, op: fin(t, T('c0')) }) + tx(270, 118, 'first page', { size: 24, italic: true, fill: GREY, op: fin(t, T('c0')) });
+    a += code(t, 120, 180, 940, [['GET /v1/feed?limit=50', F('c0', .1), WHITE, 'no cursor = start from the top']], { title: 'HTTP', noteX: 520 });
+    a += code(t, 120, 330, 940, [
+      ['SELECT tweet_id, author_id, text, ts', F('c1', .05)],
+      ['FROM   tweets', F('c1', .1)],
+      ['WHERE  author_id IN (…followees…)', F('c1', .15)],
+      [`ORDER  BY <tspan fill="${YELLOW}">tweet_id</tspan> DESC`, F('c1', .3)],
+      [`LIMIT  <tspan fill="${YELLOW}">51</tspan>;`, F('c1', .6), WHITE, '← 51 to learn has_more'],
+    ], { title: 'SQL', noteX: 380 });
+    a += code(t, 120, 640, 940, [
+      ['200 OK', F('c2', .55)],
+      ['{ "items": [ …50… ],', F('c2', .6), WHITE, 'last one is 9142'],
+      [`  "next_cursor": "<tspan fill="${YELLOW}">eyJpZCI6IjkxNDIifQ</tspan>",`, F('c3', .5)],
+      [`  "has_more": <tspan fill="${YELLOW}">true</tspan> }`, F('c2', .75)],
+    ], { title: 'RESPONSE', noteX: 520 });
+    // right: 51 rows asked, 50 returned, the extra one answers "is there more?"
+    const g0 = F('c2', .05);
+    for (let i = 0; i < 51; i++) {
+      const cx = 1180 + (i % 10) * 62, cy = 360 + Math.floor(i / 10) * 62;
+      const last = i === 50, edge = i === 49;
+      a += box(cx, cy, 48, 48, { fill: last ? 'none' : (edge && t > F('c3', .1) ? YELLOW : '#3f6f7c'), stroke: last ? YELLOW : 'none', w: 3, rx: 6, op: fin(t, g0 + i * .02, .25) * (last ? 1 : .9) });
+    }
+    a += tx(1180, 320, '51 rows asked for', { size: 30, italic: true, fill: GREY, op: fin(t, g0) });
+    a += tx(1250, 735, '← the extra one: has_more = true', { size: 26, italic: true, fill: YELLOW, op: fin(t, F('c2', .5)) });
+    a += tx(1180, 800, '50 returned · the 50th is tweet 9142', { size: 28, fill: YELLOW, op: fin(t, F('c3', .15)) });
+    a += tx(1180, 850, 'the client remembers nothing', { size: 28, italic: true, fill: GREY, op: fin(t, F('c3', .6)) });
+    s += grp(A, a);
+  }
+  // phase B: inside the cursor (c4..c5)
+  const B = win(t, T('c4'), T('c6'));
+  if (B > 0) {
+    let b = tag('FROM THE SHEET · P3', 1);
+    b += tx(960, 220, 'What is inside the cursor', { size: 40, italic: true, anchor: 'middle', fill: GREY, op: fin(t, T('c4')) });
+    b += grp(fin(t, F('c4', .15)), box(240, 320, 420, 100, { stroke: WHITE, fill: INK, w: 2, rx: 12 }) + tx(450, 382, '{"id":"9142"}', { size: 36, mono: true, anchor: 'middle' }));
+    b += tx(450, 470, 'the last row you handed out', { size: 26, italic: true, anchor: 'middle', fill: GREY, op: fin(t, F('c4', .3)) });
+    b += arrow(690, 370, 1010, GREY, fin(t, F('c4', .5))) + tx(850, 350, 'base64', { size: 26, mono: true, anchor: 'middle', fill: GREY, op: fin(t, F('c4', .5)) });
+    b += grp(fin(t, F('c4', .7)), box(1030, 320, 650, 100, { stroke: YELLOW, fill: INK, w: 2.5, rx: 12 }) + tx(1355, 382, '"eyJpZCI6IjkxNDIifQ"', { size: 36, mono: true, anchor: 'middle', fill: YELLOW }));
+    b += tx(1355, 470, 'looks meaningless', { size: 26, italic: true, anchor: 'middle', fill: GREY, op: fin(t, F('c4', .85)) });
+    b += tx(960, 640, 'The ugliness is the feature.', { size: 56, anchor: 'middle', fill: YELLOW, op: fin(t, F('c5', .02)) });
+    b += tx(960, 720, 'clients can’t depend on its shape · you can change it later', { size: 32, italic: true, anchor: 'middle', fill: GREY, op: fin(t, F('c5', .4)) });
+    s += grp(B, b);
+  }
+  // phase C: second page + replay of the insert (c6..c8)
+  const C = win(t, T('c6'), T('c9'));
+  if (C > 0) {
+    let c = tag('FROM THE SHEET · P2   ·   RIGHT: SAME P1 LIST, CURSOR RULE APPLIED (ILLUSTRATIVE)', 1);
+    c += tx(120, 118, 'CURSOR', { size: 24, sans: true, ls: '.16em', fill: YELLOW, op: 1 }) + tx(270, 118, 'second page', { size: 24, italic: true, fill: GREY });
+    c += code(t, 120, 180, 820, [['GET /v1/feed?limit=50', F('c6', .02)], [`    &amp;cursor=<tspan fill="${YELLOW}">eyJpZCI6IjkxNDIifQ</tspan>`, F('c6', .1)]], { title: 'HTTP' });
+    c += code(t, 120, 380, 820, [
+      ['…', F('c6', .4)],
+      [`  AND  <tspan fill="${YELLOW}">tweet_id &lt; 9142</tspan>`, F('c6', .7), WHITE, '← the only change'],
+      ['ORDER  BY tweet_id DESC', F('c6', .75)],
+      ['LIMIT  51;', F('c6', .8)],
+    ], { title: 'SQL', noteX: 450 });
+    c += tx(120, 660, 'index seek · 51 rows · any depth', { size: 36, fill: YELLOW, op: fin(t, F('c7', .25)) });
+    c += tx(120, 720, 'page 40 still reads 51 rows', { size: 28, italic: true, fill: GREY, op: fin(t, F('c7', .6)) });
+    // replay on the toy list
+    const rx = 1250;
+    c += feedRows(t, { x0: rx, dx: 92, y1: 330, y2: 470, y3: 610, w: 80, tA: F('c8', -.6), tB: F('c8', .05), tC: F('c8', .45), mode: 'cursor' });
+    c += tx(rx + 2.5 * 92, 760, '“older than 9142” never changes meaning', { size: 28, italic: true, anchor: 'middle', fill: YELLOW, op: fin(t, F('c8', .55)) });
+    c += tx(rx + 2.5 * 92, 810, 'no repeat · no skip', { size: 32, anchor: 'middle', fill: YELLOW, op: fin(t, F('c8', .8)) });
+    s += grp(C, c);
+  }
+  // phase D: tie-breaker, snowflake, last page (c9..c11)
+  const D = win(t, T('c9'));
+  if (D > 0) {
+    let d = tag('FROM THE SHEET · P2, P3', 1);
+    d += tx(120, 180, 'timestamp alone: 40 tweets in one millisecond all repeat, or all vanish', { size: 32, italic: true, fill: BLUE, op: fin(t, F('c9', .1)) });
+    const sf = fin(t, F('c10', .1));
+    d += code(t, 120, 255, 1100, [
+      [`cursor = base64({<tspan opacity="${(1 - .7 * sf).toFixed(2)}">"ts":1723450000123, </tspan>"id":"9142"})`, F('c9', .45)],
+      ['', F('c9', .45)],
+      [`WHERE (<tspan opacity="${(1 - .7 * sf).toFixed(2)}">ts, </tspan>tweet_id) &lt; (<tspan opacity="${(1 - .7 * sf).toFixed(2)}">1723450000123, </tspan>9142)`, F('c9', .6), YELLOW],
+      ['ORDER BY ts DESC, tweet_id DESC', F('c9', .65)],
+      ['LIMIT 51;', F('c9', .7)],
+    ], { title: 'TIE-BREAKER: COMPARE AS A PAIR' });
+    d += tx(120, 585, 'earlier ts wins · if ts ties, smaller id wins', { size: 28, italic: true, fill: GREY, op: fin(t, F('c9', .8)) });
+    d += tx(1300, 300, 'Snowflake IDs:', { size: 36, fill: YELLOW, op: fin(t, F('c10', .02)) })
+      + tx(1300, 350, 'time-ordered and unique', { size: 30, italic: true, fill: WHITE, op: fin(t, F('c10', .3)) })
+      + tx(1300, 420, 'the ID alone is the cursor', { size: 36, fill: YELLOW, op: fin(t, F('c10', .6)) });
+    d += code(t, 120, 650, 1100, [[`200 OK  { "items": [ …23… ], "next_cursor": null, "has_more": <tspan fill="${YELLOW}">false</tspan> }`, F('c11', .05)]], { title: 'LAST PAGE', size: 24 });
+    d += tx(120, 840, 'a short page is not the signal', { size: 32, italic: true, fill: BLUE, op: fin(t, F('c11', .45)) })
+      + tx(640, 840, 'has_more is the contract', { size: 36, fill: YELLOW, op: fin(t, F('c11', .75)) });
+    d += tx(120, 900, 'a page can come back short: rows filtered out during hydration', { size: 28, italic: true, fill: GREY, op: fin(t, F('c11b', .1)) });
+    s += grp(D, d);
+  }
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 3 · where LIMIT belongs
+function actLimit(t) {
+  const v = win(t, T('l0'), T('j0'));
+  if (v <= 0) return '';
+  let s = tag('FROM THE SHEET · P6   ·   1,000 FOLLOWS IS INFERRED (100 KEPT + 900 DELETED)', 1);
+  s += tx(120, 170, 'LIMIT on what you return.', { size: 44, fill: YELLOW, op: fin(t, F('l0', .4)) })
+    + tx(720, 170, 'Never on what you filter by.', { size: 44, fill: BLUE, op: fin(t, F('l0', .7)) });
+  const bad = fin(t, F('l3', .05));
+  const inner = t >= F('l3', .05) ? ` <tspan fill="${RED}">LIMIT 100</tspan>` : '';
+  s += code(t, 120, 240, 960, [
+    ['SELECT tweet_id, author_id, text, ts', F('l1', .02)],
+    ['FROM   tweets', F('l1', .05)],
+    ['WHERE  author_id IN (', F('l1', .1)],
+    [`  <tspan fill="${BLUE}">SELECT followee_id FROM follows</tspan>`, F('l1', .2)],
+    [`  <tspan fill="${BLUE}">WHERE follower_id = 'u9'</tspan>${inner})`, F('l1', .3), WHITE, t >= F('l3', .05) ? '' : '← no LIMIT here, ever'],
+    ['ORDER  BY tweet_id DESC', F('l1', .7)],
+    [`LIMIT  <tspan fill="${YELLOW}">51</tspan>;`, F('l2', .05), WHITE, '← LIMIT lives here'],
+  ], { title: 'SQL', noteX: 640 });
+  s += tx(140, 620, 'inner: who does u9 follow? — not a page, you need all of them', { size: 28, italic: true, fill: BLUE, op: fin(t, F('l1', .3)) });
+  s += tx(140, 664, 'outer: which tweets come back', { size: 28, italic: true, fill: YELLOW, op: fin(t, F('l1', .75)) });
+  // 1,000 followed accounts as a 40 x 25 grid
+  const GX = 1160, GY = 250, st = 16.5;
+  const g = fin(t, F('l1', .3));
+  if (g > 0) {
+    let grid = '';
+    for (let i = 0; i < 1000; i++) {
+      const r = Math.floor(i / 40), cl = i % 40;
+      const lit = t >= F('l2', .2) ? fin(t, F('l2', .2) + r * .02, .3) : 0;
+      const gone = i >= 100 ? bad : 0;
+      const col = gone > .5 ? '#2a2a2e' : (lit > .5 ? YELLOW : DIM);
+      grid += `<rect x="${n1(GX + cl * st)}" y="${n1(GY + r * st)}" width="12" height="12" rx="2" fill="${col}" opacity="${(g * (gone > .5 ? .6 : 1)).toFixed(2)}"/>`;
+    }
+    s += grid;
+    s += tx(GX, GY - 20, 'accounts u9 follows', { size: 24, italic: true, fill: GREY, op: g });
+  }
+  s += tx(GX, 700, '→ the 51 newest tweets, from all of them', { size: 28, fill: YELLOW, op: fin(t, F('l2', .5)) * (1 - bad) });
+  s += grp(bad, box(GX - 6, GY - 6, 40 * st + 8, 2.5 * st + 8, { stroke: RED, w: 2.5, rx: 4 }));
+  s += tx(GX, 700, '100 kept · 900 accounts silently gone', { size: 30, fill: RED, op: fin(t, F('l3', .45)) });
+  s += tx(GX, 750, 'no error · no warning', { size: 30, italic: true, fill: GREY, op: fin(t, F('l4', .05)) });
+  s += tx(120, 860, 'teaching shape, not production — that is why the feed is precomputed', { size: 32, italic: true, fill: GREY, op: fin(t, F('l5', .2)) });
+  s += tx(120, 910, 'u9 follows 5,000 → scans 5,000 authors’ tweets, per feed open', { size: 28, italic: true, fill: BLUE, op: fin(t, F('l5b', .1)) });
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 4 · IN versus JOIN
+function actJoin(t) {
+  const v = win(t, T('j0'), T('e0'));
+  if (v <= 0) return '';
+  let s = tag('FROM THE SHEET · P7   ·   TOY ROWS a1, a2 ARE ILLUSTRATIVE', 1);
+  s += tx(960, 170, 'Do I need any columns from the second table?', { size: 44, italic: true, anchor: 'middle', op: fin(t, F('j0', .35)) });
+  s += code(t, 120, 260, 820, [
+    ['SELECT t.tweet_id, t.text', F('j1', .3)],
+    ['FROM   tweets t', F('j1', .3)],
+    ['WHERE  t.author_id IN (', F('j1', .3)],
+    ['  SELECT followee_id FROM follows', F('j1', .3)],
+    ["  WHERE follower_id = 'u9');", F('j1', .3)],
+  ], { title: 'IN / EXISTS · FILTERING ONLY', tcol: YELLOW, stroke: '#6b5f2a', size: 24, lh: 36 });
+  s += tx(140, 528, 'is this author in the set?', { size: 28, italic: true, fill: YELLOW, op: fin(t, F('j1', .45)) });
+  s += tx(140, 568, 'EXISTS: safest default · stops at the first match', { size: 24, italic: true, fill: GREY, op: fin(t, F('j1b', .1)) });
+  s += code(t, 980, 260, 820, [
+    ['SELECT t.tweet_id, t.text,', F('j2', .1)],
+    [`  <tspan fill="${YELLOW}">f.ts AS followed_since</tspan>`, F('j2', .1)],
+    ['FROM   tweets t', F('j2', .1)],
+    ['JOIN   follows f ON f.followee_id = t.author_id', F('j2', .1)],
+    ["WHERE  f.follower_id = 'u9';", F('j2', .1)],
+  ], { title: 'JOIN · NEED BOTH TABLES', tcol: WHITE, size: 24, lh: 36 });
+  s += tx(1000, 540, 'followed_since only exists in follows', { size: 28, italic: true, fill: GREY, op: fin(t, F('j2', .5)) });
+  // duplicate follow row
+  const d = fin(t, F('j3', .1));
+  if (d > 0) {
+    let q = tx(120, 620, 'follows', { size: 24, sans: true, ls: '.12em', fill: GREY });
+    q += tile(220, 670, 'u9 → A', { w: 180, size: 24 }) + tile(220, 750, 'u9 → A', { w: 180, size: 24, stroke: RED, fill: RED, op: fin(t, F('j3', .5)) });
+    q += tx(330, 760, 'same pair, twice', { size: 26, italic: true, fill: RED, op: fin(t, F('j3', .6)) });
+    s += grp(d, q);
+  }
+  const j = fin(t, F('j4', .05)), i2 = fin(t, F('j4', .5));
+  if (j > 0) {
+    let q = tx(620, 640, 'JOIN', { size: 26, mono: true, fill: BLUE });
+    ['a1', 'a1', 'a2', 'a2'].forEach((l, k) => q += tile(760 + k * 96, 632, l, { w: 80, size: 24, stroke: BLUE, fill: BLUE, op: fin(t, F('j4', .05) + k * .1, .3) }));
+    q += tx(1150, 640, 'one row per matching pair — can multiply', { size: 26, italic: true, fill: BLUE });
+    s += grp(j, q);
+  }
+  if (i2 > 0) {
+    let q = tx(620, 750, 'IN', { size: 26, mono: true, fill: YELLOW });
+    ['a1', 'a2'].forEach((l, k) => q += tile(760 + k * 96, 742, l, { w: 80, size: 24, stroke: YELLOW, fill: YELLOW }));
+    q += tx(1150, 750, 'one row per tweet — cannot', { size: 26, italic: true, fill: YELLOW });
+    s += grp(i2, q);
+  }
+  s += tx(620, 850, 'NULL possible? never NOT IN — one NULL returns zero rows', { size: 30, fill: RED, op: fin(t, F('j5', .3)) });
+  s += tx(620, 905, 'IN and EXISTS: same semi-join plan · pick whichever reads more clearly', { size: 28, italic: true, fill: GREY, op: fin(t, F('j6', .15)) });
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 5 · say it cold
+function actClose(t) {
+  const v = win(t, T('e0'));
+  if (v <= 0) return '';
+  let s = tag('SAY THIS ALOUD · QUOTED FROM THE SHEET, P1 AND P5', 1, YELLOW);
+  s += tx(200, 220, 'Say it cold', { size: 40, italic: true, fill: GREY, op: fin(t, F('e0', .1)) });
+  s += tx(200, 330, '“Offset pagination isn’t slow, it’s wrong —', { size: 46, op: fin(t, F('e1', .05)) })
+    + tx(240, 395, '… a feed mutates between page 1 and page 2,', { size: 38, fill: GREY, op: fin(t, F('e1', .45)) })
+    + tx(240, 450, 'so you duplicate and skip rows.”', { size: 38, fill: GREY, op: fin(t, F('e1', .75)) });
+  s += tx(200, 560, '“Opaque cursor over the snowflake tweet ID —', { size: 46, fill: YELLOW, op: fin(t, F('e2', .05)) })
+    + tx(240, 625, 'correct under inserts, O(1) at any depth.”', { size: 38, fill: YELLOW, op: fin(t, F('e2', .5)) });
+  s += tx(960, 800, 'Positions move. Items don’t.', { size: 60, italic: true, anchor: 'middle', fill: YELLOW, op: fin(t, F('e3', .05)) });
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- frame
+function renderAt(t) {
+  t = clamp(t, 0, TL.duration);
+  $('g').innerHTML = actHook(t) + actOffset(t) + actCursor(t) + actLimit(t) + actJoin(t) + actClose(t);
+  let cap = '', chip = '';
+  for (const id in cues) if (t >= cues[id].start - .12) cap = cues[id].text;
+  for (const sc of TL.scenes) if (t >= sc.start) chip = sc.chip;
+  $('cap').textContent = cap;
+  $('chip').textContent = chip;
+  $('bar').style.width = (t / TL.duration * 100).toFixed(3) + '%';
+}
+window.renderAt = renderAt;
+
+if (RENDER) {
+  renderAt(0);
+  window.DURATION = TL.duration;
+  document.fonts.ready.then(() => { window.READY = true; });
+} else {
+  const stage = $('stage'), audio = new Audio('narration.wav');
+  const fit = () => {
+    const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+    stage.style.transform = `translate(${(innerWidth - 1920 * s) / 2}px,${(innerHeight - 1080 * s) / 2}px) scale(${s})`;
+  };
+  addEventListener('resize', fit); fit();
+  $('hint').hidden = false;
+  const toggle = () => { $('hint').hidden = true; audio.paused ? audio.play() : audio.pause(); };
+  addEventListener('click', toggle);
+  addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); toggle(); }
+    if (e.code === 'ArrowRight') audio.currentTime += 5;
+    if (e.code === 'ArrowLeft') audio.currentTime -= 5;
+  });
+  (function loop() { renderAt(audio.currentTime); requestAnimationFrame(loop); })();
+}
+</script>
+</body>
+</html>

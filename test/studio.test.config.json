@@ -1,0 +1,20 @@
+{
+  "repoRoot": "..",
+  "videoRoot": "../examples",
+  "stateDir": "../.test-tmp/state",
+  "knowledgeRoot": "../.test-tmp/knowledge",
+  "briefsDir": "./fixtures/briefs",
+  "port": 4399,
+  "host": "127.0.0.1",
+  "model": null,
+  "claudePath": null,
+  "chatConcurrency": 2,
+  "chatBudgetUsd": 0.5,
+  "jobBudgetUsd": 15,
+  "seedModel": "sonnet",
+  "seedBudgetUsd": 15,
+  "draftBudgetUsd": 0.1,
+  "vaultName": "knowledge",
+  "companies": { "acme": "Acme", "globex": "Globex" },
+  "generalSeries": ["basics"]
+}

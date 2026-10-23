@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Knowledge · Video Studio</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/studio.css">
+<style>
+.dot { display:inline-block; width:.65rem; height:.65rem; border-radius:50%; margin-right:.4rem; background:var(--muted); }
+.dot.fuzzy { background:var(--red); } .dot.learning { background:var(--yellow); } .dot.known { background:var(--green); }
+a.kcard { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.8rem .9rem; display:flex; flex-direction:column; gap:.35rem; color:var(--fg); }
+a.kcard:hover { text-decoration:none; border-color:var(--blue); }
+a.kcard .title { font-family:var(--serif); font-size:1.05rem; }
+a.kcard .words { font-size:.9rem; } a.kcard .words.def { color:var(--muted); font-style:italic; }
+a.kcard .meta { color:var(--muted); font-size:.85rem; display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; }
+.chip small { opacity:.7; margin-left:.25rem; }
+.note { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; margin:.8rem 0; }
+.note p { margin:.4rem 0; }
+.note h4 { font-family:var(--serif); color:var(--yellow); font-weight:400; margin:.8rem 0 .2rem; }
+.note ul { margin:.2rem 0 .4rem; padding-left:1.2rem; columns:2 260px; column-gap:2rem; } .note li { margin:.15rem 0; break-inside:avoid; color:var(--muted); font-size:.9rem; }
+#seed { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; margin:.8rem 0; display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; }
+#seed input[type=number] { width:5rem; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:.4rem .5rem; font:inherit; }
+#seedlog { flex-basis:100%; margin:0; font-size:.8rem; color:var(--muted); white-space:pre-wrap; max-height:10rem; overflow:auto; }
+#seedlog:empty { display:none; }
+.nothing { text-align:center; padding:2rem 1rem; color:var(--muted); }
+.cards.k { grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
+</style></head>
+<body>
+<header class="top"><span class="brand">Video Studio</span>
+<nav><a href="/">Library</a><a href="/create">Create</a><a href="/knowledge" class="active">Knowledge</a></nav>
+<span id="count" class="muted"></span><a id="obsidian" href="#">Open vault in Obsidian</a></header>
+<main class="wrap">
+  <h1>Knowledge</h1>
+  <div id="seed">
+    <span id="seedcount" class="muted"></span>
+    <label class="muted">limit <input id="limit" type="number" min="1" value="10"></label>
+    <button class="primary" id="seedgo">Seed videos</button> <button id="seedcancel" hidden>Cancel</button>
+    <span id="seedmsg" class="muted"></span>
+    <pre id="seedlog"></pre>
+  </div>
+  <div id="body">
+    <input id="q" type="search" placeholder="Search titles, aliases, your words and definitions">
+    <div class="chips" id="companies"></div>
+    <div class="chips" id="statuses"></div>
+    <div class="chips" id="kinds"></div>
+    <div id="note"></div>
+    <div id="list"></div>
+  </div>
+  <div id="nothing" class="nothing" hidden>Nothing saved yet. Seed from the videos or press + on a transcript line.</div>
+</main>
+<script>
+const KIND_LABELS = { primer:'Primer', sd:'System design', beh:'Behavioral', code:'Coding', hm:'Hiring manager', mgr:'Manager round', loop:'Loop', next:'Next round', other:'Other' };
+const STATUSES = ['fuzzy', 'learning', 'known'];
+const S = { k: null, company: null, status: null, kind: null, q: '', job: null };
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const renderNote = (body) => { const out = []; let list = false;
+  for (const raw of String(body || '').split('\n')) { const l = raw.trim(); if (!l) continue;
+    const item = /^[-*]\s+(.*)$/.exec(l); if (item && !list) { out.push('<ul>'); list = true; } else if (!item && list) { out.push('</ul>'); list = false; }
+    const t = (x) => esc(x.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, a, b) => b || a));
+    const h = /^#{1,6}\s+(.*)$/.exec(l);
+    out.push(item ? `<li>${t(item[1])}</li>` : h ? `<h4>${t(h[1])}</h4>` : `<p>${t(l)}</p>`); }
+  if (list) out.push('</ul>'); return out.join(''); };const kindsOf = c => new Set(c.sources.map(s => S.k.videoKinds[s.folder]).filter(Boolean));
+const companyKeys = c => c.companies.map(x => x.company);
+
+async function load() {
+  S.k = await (await fetch('/api/knowledge')).json();
+  $('#obsidian').href = `obsidian://open?vault=${encodeURIComponent(S.k.vaultName)}`;
+  renderSeed(); renderChips(); render();
+}
+function renderSeed() {
+  const total = Object.keys(S.k.videoKinds).length;
+  const seeded = Object.keys(S.k.videoKinds).filter(f => (S.k.byVideo[f] || []).length).length;
+  $('#seedcount').textContent = `${seeded} of ${total} videos seeded`;
+  const j = S.job; const running = j && j.status === 'running';
+  $('#seedgo').disabled = !!running; $('#limit').disabled = !!running; $('#seedcancel').hidden = !(running && j.kind === 'seed');
+  let msg = '';
+  if (running && j.kind === 'create') msg = 'a create job is running';
+  else if (running) msg = `seeding ${j.detail?.done ?? 0} of ${j.detail?.total ?? '?'}${j.detail?.current ? `: ${j.detail.current}` : ''}`;
+  else if (j && j.kind === 'seed') msg = j.status + (j.error ? `: ${j.error}` : '');
+  $('#seedmsg').textContent = msg;
+}
+function renderChips() {
+  const cs = S.k.concepts;
+  $('#companies').innerHTML = S.k.companiesInCatalog.map(c => {
+    const n = cs.filter(x => companyKeys(x).includes(c.key)).length;
+    return `<span class="chip ${S.company === c.key ? 'on' : ''}" data-company="${esc(c.key)}">${esc(c.title)}<small>${n}</small></span>`;
+  }).join('');
+  $('#statuses').innerHTML = STATUSES.map(s => `<span class="chip ${S.status === s ? 'on' : ''}" data-status="${s}"><span class="dot ${s}"></span>${s}<small>${cs.filter(x => x.status === s).length}</small></span>`).join('');
+  const kinds = [...new Set(Object.values(S.k.videoKinds))].filter(k => cs.some(c => kindsOf(c).has(k)));
+  $('#kinds').innerHTML = kinds.map(k => `<span class="chip ${S.kind === k ? 'on' : ''}" data-kind="${k}">${esc(KIND_LABELS[k] || k)}<small>${cs.filter(c => kindsOf(c).has(k)).length}</small></span>`).join('');
+}
+function card(c) {
+  const words = c.inMyWords.trim();
+  const text = words || c.definition || '';
+  const shown = text.length > 140 ? text.slice(0, 140) + '…' : text;
+  const chips = companyKeys(c).map(k => `<span class="tag">${esc(S.k.companiesInCatalog.find(x => x.key === k)?.title ?? k)}</span>`).join('');
+  return `<a class="kcard" href="/k/${esc(c.slug)}"><div class="title"><span class="dot ${esc(c.status)}"></span>${esc(c.title)}</div>`
+    + (shown ? `<div class="words ${words ? '' : 'def'}">${esc(shown)}</div>` : '')
+    + `<div class="meta">${chips}<span>${c.sources.length} source${c.sources.length === 1 ? '' : 's'}</span></div></a>`;
+}
+function render() {
+  const all = S.k.concepts;
+  $('#count').textContent = `${all.length} concepts`;
+  const empty = all.length === 0;
+  $('#body').hidden = empty; $('#nothing').hidden = !empty;
+  if (empty) { $('#seed').after($('#nothing')); return; }
+  const q = S.q.trim().toLowerCase();
+  let rows = all.filter(c => (!S.company || companyKeys(c).includes(S.company)) && (!S.status || c.status === S.status) && (!S.kind || kindsOf(c).has(S.kind))
+    && (!q || [c.title, ...c.aliases, c.inMyWords, c.definition || ''].some(s => s.toLowerCase().includes(q))));
+  rows.sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+  const note = S.company ? S.k.companies.find(n => n.key === S.company) : null;
+  $('#note').innerHTML = note ? `<div class="note"><b>${esc(note.title)}</b>${renderNote(note.body)}</div>` : '';
+  if (!rows.length) { $('#list').innerHTML = `<div class="empty">Nothing matches${q ? ` "${esc(S.q.trim())}"` : ''}. Try fewer words or clear a filter.</div>`; return; }
+  const groups = S.status ? [[null, rows]] : STATUSES.map(s => [s, rows.filter(c => c.status === s)]).filter(g => g[1].length);
+  $('#list').innerHTML = groups.map(([s, xs]) => (s ? `<div class="group-title"><span class="dot ${s}"></span>${s} (${xs.length})</div>` : '') + `<div class="cards k">${xs.map(card).join('')}</div>`).join('');
+}
+$('#q').addEventListener('input', e => { S.q = e.target.value; render(); });
+for (const [id, key, attr] of [['companies', 'company', 'company'], ['statuses', 'status', 'status'], ['kinds', 'kind', 'kind']])
+  $('#' + id).addEventListener('click', e => { const el = e.target.closest('.chip'); if (!el) return; const v = el.dataset[attr]; S[key] = S[key] === v ? null : v; renderChips(); render(); });
+
+function logLine(l) {
+  let e; try { e = JSON.parse(l); } catch { return; }
+  if (e.type === 'video') {
+    const t = e.error ? `error: ${e.error}` : `+${(e.created || []).length} ~${(e.appended || []).length}`;
+    const el = $('#seedlog'); el.textContent += `${e.folder}: ${t}\n`; el.scrollTop = el.scrollHeight;
+    load();
+  }
+}
+function events() {
+  const es = new EventSource('/api/job/events');
+  es.addEventListener('status', ev => { const was = S.job; S.job = JSON.parse(ev.data).job; if (S.k) renderSeed(); if (was && was.status === 'running' && S.job && S.job.status !== 'running') load(); });
+  es.addEventListener('line', ev => logLine(JSON.parse(ev.data).line));
+}
+$('#seedgo').addEventListener('click', async () => {
+  const limit = Math.max(1, parseInt($('#limit').value, 10) || 10);
+  $('#seedlog').textContent = '';
+  const r = await fetch('/api/knowledge/seed', { method: 'POST', headers: { 'content-type': 'application/json', 'x-studio': '1' }, body: JSON.stringify({ limit }) });
+  const d = await r.json();
+  if (!r.ok) { $('#seedmsg').textContent = d.error || 'could not start'; return; }
+  S.job = d.job; renderSeed();
+});
+$('#seedcancel').addEventListener('click', () => fetch('/api/job', { method: 'DELETE', headers: { 'x-studio': '1' } }));
+load().then(events);
+</script>
+</body></html>

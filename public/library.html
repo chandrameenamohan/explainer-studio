@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Video Studio</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/studio.css"></head>
+<body>
+<header class="top"><span class="brand">Video Studio</span>
+<nav><a href="/" class="active">Library</a><a href="/create">Create</a><a href="/knowledge">Knowledge</a></nav>
+<span id="count" class="muted"></span><button id="rescan" title="Re-read the video folders">Rescan</button></header>
+<main class="wrap">
+  <input id="q" type="search" placeholder="Search titles, chips and narration lines" autofocus>
+  <div class="chips" id="companies"></div>
+  <div class="chips" id="kinds"></div>
+  <div class="chips" id="flags"><span class="chip" data-flag="unwatched">Unwatched only</span>
+    <select id="sort" style="width:auto;margin-left:auto"><option value="series">Series order</option><option value="newest">Newest</option><option value="title">Title</option></select></div>
+  <div id="groups"></div>
+</main>
+<script>
+const KIND_LABELS = { primer:'Primer', sd:'System design', beh:'Behavioral', code:'Coding', hm:'Hiring manager', mgr:'Manager round', loop:'Loop', next:'Next round', other:'Other' };
+const state = { records: [], company: null, kind: null, unwatched: false, sort: 'series', q: '', watched: {} };
+const $ = s => document.querySelector(s);
+const fmt = s => s == null ? '' : `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function load() {
+  const c = await (await fetch('/api/catalog')).json();
+  state.records = c.records;
+  $('#count').textContent = `${c.records.length} videos` + (c.unreadable.length ? `, ${c.unreadable.length} unreadable` : '');
+  state.watched = Object.fromEntries(c.records.filter(r => r.watched).map(r => [r.folder, true]));
+  renderChips(); render();
+}
+function renderChips() {
+  const companies = [...new Set(state.records.map(r => r.company))].sort();
+  $('#companies').innerHTML = companies.map(c => `<span class="chip ${state.company===c?'on':''}" data-company="${esc(c)}">${esc(c)}</span>`).join('');
+  const kinds = [...new Set(state.records.map(r => r.kind))].sort((a,b) => Object.keys(KIND_LABELS).indexOf(a) - Object.keys(KIND_LABELS).indexOf(b));
+  $('#kinds').innerHTML = kinds.map(k => `<span class="chip ${state.kind===k?'on':''}" data-kind="${k}">${KIND_LABELS[k]||k}</span>`).join('');
+  $('#flags .chip').classList.toggle('on', state.unwatched);
+}
+function searchHit(r, q) {
+  if (!q) return null;
+  for (const s of r.scenes) for (const l of s.lines) if (l.text.toLowerCase().includes(q)) return { kind: 'line', text: l.text, start: l.start, key: l.key };
+  for (const s of r.scenes) if (s.chip.toLowerCase().includes(q)) return { kind: 'chip', text: s.chip };
+  if (r.title.toLowerCase().includes(q) || r.folder.includes(q)) return { kind: 'title' };
+  return null;
+}
+function render() {
+  const q = state.q.trim().toLowerCase();
+  let rows = state.records.map(r => ({ r, hit: searchHit(r, q) })).filter(x => !q || x.hit);
+  if (state.company) rows = rows.filter(x => x.r.company === state.company);
+  if (state.kind) rows = rows.filter(x => x.r.kind === state.kind);
+  if (state.unwatched) rows = rows.filter(x => !state.watched[x.r.folder]);
+  if (state.sort === 'newest') rows.sort((a,b) => b.r.mtime - a.r.mtime);
+  if (state.sort === 'title') rows.sort((a,b) => a.r.title.localeCompare(b.r.title));
+  const groups = new Map();
+  for (const x of rows) { const g = x.r.unsorted ? 'Unsorted' : x.r.company === 'General' ? `General: ${x.r.series}` : x.r.company; (groups.get(g) || groups.set(g, []).get(g)).push(x); }
+  $('#groups').innerHTML = [...groups].map(([g, xs]) => `<div class="group-title">${esc(g)} (${xs.length})</div><div class="cards">${xs.map(card).join('')}</div>`).join('') || `<p class="muted">Nothing matches${q ? ` "${esc(state.q.trim())}"` : ''}${state.company || state.kind || state.unwatched ? ' with these filters' : ''}. Try fewer words or clear a filter.</p>`;
+}
+function card({ r, hit }) {
+  const href = hit && hit.kind === 'line' && hit.start != null ? `/v/${r.folder}?t=${Math.max(0, hit.start - 1).toFixed(1)}&line=${hit.key}` : `/v/${r.folder}`;
+  const hitHtml = hit && hit.kind !== 'title' ? `<div class="hit">${hit.start != null ? `<b>${fmt(hit.start)}</b> ` : ''}${esc(hit.text)}</div>` : '';
+  const tags = [state.watched[r.folder] ? '<span class="tag watched">watched</span>' : '', r.mp4 ? '' : '<span class="tag">not rendered</span>', r.hasBrief && !r.mp4 ? '<span class="tag">job</span>' : ''].join('');
+  return `<a class="card ${r.mp4?'':'unrendered'}" href="${href}"><div class="meta"><span>${esc(KIND_LABELS[r.kind]||r.kind)}</span>${r.nn?`<span>#${r.nn}</span>`:''}<span>${fmt(r.durationSec)}</span>${tags}</div><div class="title">${esc(r.title)}</div><div class="meta"><span>${esc(r.folder)}</span></div>${hitHtml}</a>`;
+}
+$('#q').addEventListener('input', e => { state.q = e.target.value; render(); });
+$('#sort').addEventListener('change', e => { state.sort = e.target.value; render(); });
+$('#companies').addEventListener('click', e => { const c = e.target.dataset.company; if (!c) return; state.company = state.company === c ? null : c; renderChips(); render(); });
+$('#kinds').addEventListener('click', e => { const k = e.target.dataset.kind; if (!k) return; state.kind = state.kind === k ? null : k; renderChips(); render(); });
+$('#flags').addEventListener('click', e => { if (e.target.dataset.flag) { state.unwatched = !state.unwatched; renderChips(); render(); } });
+$('#rescan').addEventListener('click', async () => { await fetch('/api/catalog/rescan', { method: 'POST', headers: { 'x-studio': '1' } }); load(); });
+load();
+</script>
+</body></html>

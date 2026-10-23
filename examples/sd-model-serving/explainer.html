@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Serving Explainer</title>
+<!--
+  3Blue1Brown-style explainer: one model ("fraud-v7", handed over Monday 09:00) carried from hand-over
+  to its first bad rollout. Every frame is a pure function of time: renderAt(t). Open the file to preview
+  with narration (click or space); render.mjs steps renderAt() to make the mp4.
+  Cue ids (h0, r2, ...) are the line ids in script.json; timings come from timeline.js.
+-->
+<style>
+:root{--bg:#0b0b0d;--white:#f2f2f2;--grey:#8c8c8c;--blue:#58c4dd;--yellow:#f7d84a;--green:#83c167;--red:#fc6255;--teal:#5cd0b3}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:#000;overflow:hidden}
+#stage{position:absolute;left:0;top:0;width:1920px;height:1080px;background:var(--bg);transform-origin:0 0;overflow:hidden;
+  color:var(--white);font-family:"STIX Two Text","STIXGeneral","Charter","Georgia",serif}
+#sv{position:absolute;left:0;top:0}
+.o{position:absolute;opacity:0;white-space:nowrap}
+.mid{left:0;width:1920px;text-align:center}
+.y{color:var(--yellow)}.b{color:var(--blue)}.g{color:var(--grey)}
+#brand{position:absolute;left:60px;top:34px;font:600 18px "Avenir Next","Helvetica Neue",sans-serif;letter-spacing:.18em;color:#5c5c5c}
+#chip{position:absolute;right:60px;top:30px;font:600 22px "Avenir Next","Helvetica Neue",sans-serif;letter-spacing:.06em;color:var(--blue)}
+#cap{position:absolute;left:200px;right:200px;bottom:26px;height:80px;display:flex;align-items:center;justify-content:center;
+  text-align:center;font:28px "Avenir Next","Helvetica Neue",sans-serif;color:#a4a4a4}
+#bar{position:absolute;left:0;bottom:0;height:4px;background:var(--blue);opacity:.7;width:0}
+.fq{left:160px;font-size:46px;font-style:italic}
+.fa{left:204px;font-size:32px;color:var(--blue)}
+.fa i{color:var(--grey);font-style:normal;margin:0 12px}
+.idea{left:200px;font-size:52px}
+.idea b{color:var(--blue);font-weight:400;margin-right:28px}
+#hint{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font:22px sans-serif;color:#fff;background:#000a;padding:14px 22px;border-radius:12px;z-index:9}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="brand">SYSTEM DESIGN · DEPLOY AND HOST MODELS</div>
+  <div id="chip"></div>
+  <svg id="sv" width="1920" height="1080"><g id="g"></g></svg>
+
+  <div class="o write mid y" style="top:838px;font-size:46px;font-style:italic" data-in="h2" data-f=".05" data-out="r0">How do you deploy and host them?</div>
+  <div class="o write mid y" style="top:822px;font-size:46px;font-style:italic" data-in="r5" data-f=".05" data-out="m0">Assume a number. Say it aloud. Move on.</div>
+
+  <!-- follow-ups -->
+  <div class="o write fq" style="top:190px" data-in="f0" data-f=".3" data-dim="f2" data-out="e0">“One team floods the platform. What happens?”</div>
+  <div class="o fa" style="top:252px" data-in="f1" data-f=".05" data-dim="f2" data-out="e0">a quota and a queue per team<i>·</i>over quota, only that team is rejected</div>
+  <div class="o write fq" style="top:346px" data-in="f2" data-dim="f4" data-out="e0">“How is an LLM different?”</div>
+  <div class="o fa" style="top:408px" data-in="f3" data-f=".02" data-dim="f4" data-out="e0">tokens stream back<i>·</i>vLLM, continuous batching<i>·</i>capacity = tokens per second</div>
+  <div class="o write fq" style="top:502px" data-in="f4" data-dim="f6" data-out="e0">“Self-host the LLM, or call an API?”</div>
+  <div class="o fa" style="top:564px" data-in="f5" data-f=".05" data-dim="f6" data-out="e0">both: a small Qwen model for one narrow text decision, next to a frontier model API</div>
+  <div class="o fa" style="top:608px;color:var(--yellow)" data-in="f5" data-f=".62" data-dim="f6" data-out="e0">my rule: below about a third of the volume, do not self-host</div>
+  <div class="o write fq" style="top:702px" data-in="f6" data-out="e0">“The registry goes down. Does serving stop?”</div>
+  <div class="o fa" style="top:764px" data-in="f7" data-f=".05" data-out="e0">no: replicas already hold their weights<i>·</i>only new deploys wait</div>
+
+  <!-- close -->
+  <div class="o g" style="left:200px;top:214px;font-size:38px;font-style:italic" data-in="e0">The design, in four sentences</div>
+  <div class="o write idea" style="top:290px" data-in="e1"><b>1</b>Immutable versions, on a shared inference server.</div>
+  <div class="o write idea" style="top:392px" data-in="e2"><b>2</b>Small models packed on shared GPUs. Critical ones alone.</div>
+  <div class="o write idea" style="top:494px" data-in="e3"><b>3</b>Scale on queue depth, with warm replicas.</div>
+  <div class="o write idea" style="top:596px" data-in="e4"><b>4</b>Shadow, canary, everyone, with automatic rollback.</div>
+
+  <div id="cap"></div>
+  <div id="bar"></div>
+</div>
+<div id="hint" hidden>Click or press space to play</div>
+
+<script src="timeline.js"></script>
+<script>
+const TL = window.TIMELINE;
+const RENDER = location.search.includes('render');
+const $ = id => document.getElementById(id);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = p => 1 - Math.pow(1 - clamp(p), 3);
+const eio = p => { p = clamp(p); return p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; };
+const lerp = (a, b, p) => a + (b - a) * p;
+const WHITE = '#f2f2f2', GREY = '#8c8c8c', BLUE = '#58c4dd', YELLOW = '#f7d84a', GREEN = '#83c167', RED = '#fc6255', TEAL = '#5cd0b3', INK = '#141416';
+const SERIF = `'STIX Two Text','STIXGeneral','Charter','Georgia',serif`, MONO = 'Menlo,monospace', SANS = `'Avenir Next','Helvetica Neue',sans-serif`;
+
+const cues = {};
+TL.scenes.forEach(sc => sc.lines.forEach(l => cues[l.id] = l));
+const T = id => cues[id].start, TE = id => cues[id].end, F = (id, f) => T(id) + f * (TE(id) - T(id));
+const fin = (t, t0, d = .5) => ease((t - t0) / d);
+// an act is visible from its first cue to the first cue of the next act
+const win = (t, a, b) => fin(t, a - .3, .4) * (1 - fin(t, b - .45, .35));
+
+// tiny SVG string helpers
+const n1 = v => (+v).toFixed(1);
+const tx = (x, y, str, o = {}) => `<text x="${n1(x)}" y="${n1(y)}" font-size="${o.size || 28}" fill="${o.fill || WHITE}" text-anchor="${o.anchor || 'start'}"`
+  + ` font-family="${o.mono ? MONO : o.sans ? SANS : SERIF}"${o.italic ? ' font-style="italic"' : ''}${o.bold ? ' font-weight="700"' : ''}${o.ls ? ` letter-spacing="${o.ls}"` : ''} opacity="${(o.op ?? 1).toFixed(2)}">${str}</text>`;
+// one line of text whose parts appear one after another: parts = [[string, time, fill]]
+const seq = (t, x, y, parts, size = 40) => `<text x="${x}" y="${y}" font-size="${size}" font-family="${SERIF}" xml:space="preserve">`
+  + parts.map(([str, t0, fill]) => `<tspan fill="${fill || WHITE}" fill-opacity="${fin(t, t0, .4).toFixed(2)}">${str}</tspan>`).join('') + '</text>';
+const ln = (x1, y1, x2, y2, stroke, w = 3, op = 1, dash = '') => `<line x1="${n1(x1)}" y1="${n1(y1)}" x2="${n1(x2)}" y2="${n1(y2)}" stroke="${stroke}" stroke-width="${w}" opacity="${op.toFixed(2)}" stroke-linecap="round"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+const circ = (x, y, r, fill, op = 1, stroke = 'none', w = 0) => `<circle cx="${n1(x)}" cy="${n1(y)}" r="${n1(Math.max(r, 0))}" fill="${fill}" opacity="${op.toFixed(2)}" stroke="${stroke}" stroke-width="${w}"/>`;
+const box = (x, y, w, h, o = {}) => `<rect x="${n1(x)}" y="${n1(y)}" width="${n1(Math.max(w, 0))}" height="${n1(Math.max(h, 0))}" rx="${o.rx ?? 10}" fill="${o.fill || 'none'}" stroke="${o.stroke || 'none'}" stroke-width="${o.w ?? 3}" opacity="${(o.op ?? 1).toFixed(2)}"${o.dash ? ` stroke-dasharray="${o.dash}"` : ''}/>`;
+const drawn = (d, p, stroke, w = 3, op = 1) => `<path d="${d}" pathLength="1" stroke-dasharray="1" stroke-dashoffset="${(1 - clamp(p)).toFixed(4)}" fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round" opacity="${op.toFixed(2)}"/>`;
+const grp = (op, inner) => op <= 0 ? '' : `<g opacity="${op.toFixed(3)}">${inner}</g>`;
+const token = (cx, cy, text, o = {}) => box(cx - (o.w || 250) / 2, cy - (o.h || 46) / 2, o.w || 250, o.h || 46, { fill: o.bg || '#17171a', stroke: o.stroke || BLUE, w: 2, rx: 8, op: o.op ?? 1 })
+  + tx(cx, cy + 7, text, { size: o.size || 20, mono: true, anchor: 'middle', fill: o.fill || WHITE, op: o.op ?? 1 });
+const arrow = (x1, y, x2, col, op = 1) => grp(op, ln(x1, y, x2 - 6, y, col, 3) + `<path d="M${x2} ${y}l-16 -9v18z" fill="${col}"/>`);
+// a GPU: an outlined chip, filled from the bottom by its load
+const gpu = (x, y, w, h, load, col, o = {}) => box(x, y, w, h, { stroke: o.stroke || '#5a5a5a', fill: INK, w: 2, rx: 6 })
+  + box(x + 4, y + 4 + (h - 8) * (1 - load), w - 8, (h - 8) * load, { fill: col, rx: 3, op: o.fop ?? .85 });
+
+// ---------------------------------------------------------------- the model stays on screen the whole way
+function modelCard(t) {
+  const vis = fin(t, F('h0', .5), .5);
+  if (vis <= 0) return '';
+  const st = [[F('h0', .5), 'handed over', GREY], [F('a1', .3), 'packaged · Triton', BLUE], [F('b4', .75), 'dedicated GPUs', BLUE],
+    [F('c1', .55), '2 warm · up to 6', BLUE], [F('d1', .2), 'shadow', YELLOW], [F('d2', .42), 'canary 5%', YELLOW], [F('d3', .4), '↩ rolled back to v6', RED]];
+  let cur = st[0];
+  for (const x of st) if (t >= x[0]) cur = x;
+  return grp(vis, box(520, 86, 880, 64, { stroke: cur[2] === GREY ? '#555' : cur[2], fill: INK, w: 2, rx: 12 })
+    + tx(548, 128, 'Mon 09:00', { size: 24, mono: true, fill: GREY })
+    + tx(720, 128, 'fraud-v7', { size: 28, mono: true, fill: YELLOW })
+    + tx(1376, 128, cur[1], { size: 24, mono: true, anchor: 'end', fill: cur[2], op: fin(t, cur[0], .4) }));
+}
+
+// ---------------------------------------------------------------- 0 · the hand-over
+function actHook(t) {
+  const v = win(t, .3, T('r0'));
+  if (v <= 0) return '';
+  const f = fin(t, F('h0', .3));
+  let s = grp(f, tx(360, 300, 'Monday', { size: 34, italic: true, fill: GREY, anchor: 'middle' })
+    + `<path d="M270 330h130l50 50v150h-180z" fill="${INK}" stroke="${YELLOW}" stroke-width="3" stroke-linejoin="round"/><path d="M400 330v50h50" fill="none" stroke="${YELLOW}" stroke-width="3"/>`
+    + tx(360, 452, 'fraud-v7', { size: 26, mono: true, anchor: 'middle', fill: YELLOW }) + tx(360, 492, 'weights', { size: 22, italic: true, anchor: 'middle', fill: GREY }));
+  const e = fin(t, F('h1', .02));
+  s += grp(e, tx(1380, 300, 'Friday', { size: 34, italic: true, fill: GREY, anchor: 'middle' })
+    + box(1160, 370, 440, 120, { stroke: BLUE, fill: INK, w: 3, rx: 14 }) + tx(1380, 424, 'every payment', { size: 34, anchor: 'middle' })
+    + tx(1380, 466, 'answer in milliseconds', { size: 24, italic: true, anchor: 'middle', fill: BLUE }));
+  s += grp(e, drawn('M500 430L1130 430', eio((t - F('h1', .02)) / 1), GREY, 3, .8, ) + tx(815, 410, '?', { size: 72, italic: true, anchor: 'middle', fill: YELLOW, op: fin(t, F('h1', .2)) }));
+  // 200 other models: 40 x 5
+  const g0 = F('h1', .68);
+  let grid = '';
+  for (let i = 0; i < 200; i++) grid += box(360 + (i % 40) * 30, 610 + Math.floor(i / 40) * 30, 22, 22, { fill: '#3f6f7c', rx: 4, op: fin(t, g0 + (i % 40) * .018, .25) });
+  s += grid + tx(960, 800, 'and 200 other models', { size: 32, italic: true, anchor: 'middle', fill: GREY, op: fin(t, g0 + .5) });
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 1 · requirements
+function actReq(t) {
+  const v = win(t, T('r0'), T('m0'));
+  if (v <= 0) return '';
+  let s = tx(140, 250, 'the platform must', { size: 32, italic: true, fill: GREY, op: fin(t, F('r0', .12)) });
+  [['deploy a model', .24], ['scale it', .42], ['roll out safely', .58], ['share GPUs', .84]].forEach(([w, f], i) => {
+    const x = 140 + i * 418;
+    s += grp(fin(t, F('r0', f)), box(x, 276, 392, 68, { stroke: TEAL, fill: INK, w: 2 }) + tx(x + 196, 321, w, { size: 30, anchor: 'middle' }));
+  });
+  s += tx(140, 420, 'I ask', { size: 32, italic: true, fill: BLUE, op: fin(t, T('r0b')) })
+    + tx(900, 420, 'I assume, aloud', { size: 32, italic: true, fill: YELLOW, op: fin(t, F('r1', .3)) });
+  [['Online or batch?', 'online · p99 50 ms', 'r1', .38], ['How much traffic?', '2,000 requests / s at peak', 'r2', .32],
+    ['One model or many?', '200 models · 20 teams', 'r3', .36], ['Classic models or LLMs?', 'classic first', 'r4', .5]].forEach(([q, a, id, f], i) => {
+    const y = 496 + i * 82;
+    s += tx(140, y, q, { size: 42, italic: true, fill: BLUE, op: fin(t, T(id)) })
+      + arrow(720, y - 13, 860, GREY, fin(t, F(id, f)) * .8)
+      + tx(900, y, a, { size: 42, fill: YELLOW, op: fin(t, F(id, f)) });
+  });
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 2 · back of the envelope
+function actMath(t) {
+  const v = win(t, T('m0'), T('a0'));
+  if (v <= 0) return '';
+  const DX = 1300, dec = (y, str, t0) => grp(fin(t, t0), tx(DX - 70, y, '⇒', { size: 42, fill: YELLOW }) + tx(DX, y, str, { size: 42, italic: true, fill: YELLOW }));
+  let s = tx(140, 252, 'on the back of an envelope', { size: 34, italic: true, fill: GREY, op: fin(t, T('m0')) })
+    + tx(DX, 252, 'so the design decision is', { size: 34, italic: true, fill: GREY, op: fin(t, F('m0', .8)) });
+  s += seq(t, 140, 338, [['1 GPU:  ', F('m0', .14), GREY], ['100 req/s alone', F('m0', .2)], ['   →   ', F('m0', .56)], ['500 req/s', F('m0', .68), BLUE], [' in batches of 16', F('m0', .56)]])
+    + dec(338, 'dynamic batching', F('m0', .88));
+  s += ln(140, 384, 1780, 384, '#2c2c2c', 2, fin(t, T('m1')));
+  s += seq(t, 140, 458, [['2,000', F('m1', .02)], ['  ÷  500', F('m1', .2)], ['  =  4 GPUs', F('m1', .38)], ['    + half, for a failed zone', F('m1', .56), GREY]])
+    + dec(458, '6 GPUs at peak', F('m1', .9));
+  s += ln(140, 504, 1780, 504, '#2c2c2c', 2, fin(t, T('m2')));
+  s += seq(t, 140, 578, [['$2 an hour', F('m2', .04)], ['  ÷  1.8M requests', F('m2', .2)], ['  ≈  ', F('m2', .3)], ['0.1¢ per 1,000', F('m2', .3), BLUE]])
+    + seq(t, 140, 636, [['at 30% load', F('m2', .56), GREY], ['  ≈  ', F('m2', .64), GREY], ['0.37¢ per 1,000', F('m2', .64), RED], ['     3.3×', F('m2', .68), RED]], 34)
+    + dec(578, 'utilization is the lever', F('m2', .84));
+  s += ln(140, 678, 1780, 678, '#2c2c2c', 2, fin(t, T('m3')));
+  s += seq(t, 140, 752, [['4 GB to load', F('m3', .1)], ['   ·   3 min until ready', F('m3', .3)]]);
+  // a spike does not wait: a bar that fills over three minutes
+  const p = eio((t - F('m3', .3)) / 2.2);
+  s += grp(fin(t, F('m3', .3)), box(144, 782, 640, 22, { stroke: '#444', w: 2, rx: 6 }) + box(144, 782, 640 * p, 22, { fill: BLUE, rx: 6, op: .8 }))
+    + tx(810, 801, 'a spike does not wait', { size: 28, italic: true, fill: RED, op: fin(t, F('m3', .56)) })
+    + dec(752, 'keep warm replicas', F('m3', .78));
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- the frame shared by the four decisions
+// blue = the rejected option (left), yellow = the pick (right); below, the five-part answer builds up
+const PY = 262, PH = 312;
+const PART = { call: ['CALL', YELLOW], because: ['BECAUSE', WHITE], not: ['NOT THAT', BLUE], unless: ['UNLESS', TEAL], proof: ['PROOF', GREEN] };
+function decide(t, o) {
+  const pk = fin(t, o.tPick, .5), ni = o.rows.findIndex(x => x[0] === 'not'), nn = o.rows[ni + 1];
+  // the rejected option dims at the call, and lights up again while NOT THAT is said
+  const relit = fin(t, o.rows[ni][1], .4) * (nn ? 1 - fin(t, nn[1], .4) : 1), dimL = lerp(lerp(1, .48, pk), .95, relit), inL = fin(t, o.tL), inR = fin(t, o.tR);
+  let s = tx(140, 232, o.q, { size: 34, italic: true, fill: GREY, op: fin(t, o.tq) })
+    + grp(inL * dimL, box(120, PY, 760, PH, { stroke: '#333', w: 2, rx: 14 }) + tx(500, PY + 50, o.L, { size: 40, italic: true, anchor: 'middle', fill: BLUE }))
+    + grp(inR, box(1040, PY, 760, PH, { stroke: '#333', w: 2, rx: 14 }) + tx(1420, PY + 50, o.R, { size: 40, italic: true, anchor: 'middle', fill: YELLOW }))
+    + grp(pk, box(1040, PY, 760, PH, { stroke: YELLOW, w: 4, rx: 14 }) + tx(1798, PY - 14, '✓ my call', { size: 26, sans: true, bold: true, anchor: 'end', fill: GREEN }))
+    + tx(960, PY + PH / 2 + 12, 'or', { size: 36, italic: true, anchor: 'middle', fill: GREY, op: inR * (1 - pk) });
+  let y = 630;
+  o.rows.forEach(([kind, t0, text, t1], i) => {
+    const a = fin(t, t0), next = o.rows[i + 1], live = next ? 1 - fin(t, next[1], .4) : 1, [label, col] = PART[kind];
+    const lines = [].concat(text);
+    s += grp(a, box(140, y - 31, 172, 42, { stroke: col, fill: live > .5 ? col : 'none', w: 2, rx: 8, op: lerp(.7, 1, live) })
+      + tx(226, y - 3, label, { size: 20, sans: true, bold: true, anchor: 'middle', fill: live > .5 ? INK : col, ls: '.08em', op: lerp(.8, 1, live) })
+      + tx(344, y, lines[0], { size: 30, fill: kind === 'call' ? YELLOW : WHITE, op: lerp(.72, 1, live) }));
+    if (lines[1]) s += tx(344, y + 40, lines[1], { size: 30, fill: WHITE, op: fin(t, t1) });
+    y += 52;
+  });
+  return { s, dimL };
+}
+
+// ---------------------------------------------------------------- 3a · packaging
+function actPack(t) {
+  const v = win(t, T('a0'), T('b0'));
+  if (v <= 0) return '';
+  const c = decide(t, { q: 'Decision 1 · How do I package fraud-v7?', tq: T('a0'), L: 'a container per model', tL: F('a0', .42), R: 'one shared inference server', tR: F('a0', .7), tPick: F('a1', .08),
+    rows: [['call', F('a1', .05), 'a shared server: Triton  ·  models arrive as ONNX or TensorRT'],
+      ['because', T('a2'), 'batching and GPU sharing are built once, in the server'],
+      ['not', T('a3'), 'a container per model: every team writes a server  ·  a whole GPU each'],
+      ['unless', T('a4'), 'the model needs custom Python code  →  its own container'],
+      ['proof', F('a5', .06), '120 GPUs, over $100K a month  →  Triton  ·  the ML team converts PyTorch → TensorRT',
+        F('a6', .1)]] });
+  let s = c.s, L = '';
+  // the second proof line grows in two steps
+  s += tx(344, 878, 'one model measured first', { size: 30, op: fin(t, F('a6', .1)) })
+    + tx(700, 878, '·  2 models, 2 months  ≈  3× throughput  ·  the rest funded itself', { size: 30, fill: GREEN, op: fin(t, F('a7', .05)) });
+  ['team A', 'team B', 'team C'].forEach((w, i) => {
+    const x = 170 + i * 232, a = fin(t, F('a0', .46 + i * .05));
+    L += grp(a, box(x, 336, 196, 84, { stroke: BLUE, fill: INK, w: 2 }) + tx(x + 98, 368, w, { size: 22, italic: true, anchor: 'middle', fill: GREY })
+      + tx(x + 98, 402, 'own server', { size: 20, mono: true, anchor: 'middle' })
+      + ln(x + 98, 422, x + 98, 440, BLUE, 2, .7) + gpu(x + 38, 442, 120, 66, .22, BLUE) + tx(x + 98, 484, 'GPU', { size: 20, mono: true, anchor: 'middle', fill: GREY }));
+  });
+  L += tx(500, 550, 'a whole GPU each · no batching', { size: 26, italic: true, anchor: 'middle', fill: GREY, op: fin(t, F('a0', .6)) });
+  s += grp(c.dimL, L);
+  const r = fin(t, F('a0', .74));
+  let R = box(1080, 336, 680, 104, { stroke: YELLOW, fill: INK, w: 2 }) + tx(1104, 372, 'Triton', { size: 26, italic: true, fill: YELLOW })
+    + tx(1736, 372, 'batching · scheduling', { size: 20, mono: true, anchor: 'end', fill: GREY });
+  [['fraud-v7', YELLOW], ['model B', WHITE], ['model C', WHITE], ['…', GREY]].forEach(([w, col], i) =>
+    R += token(1170 + i * 168, 408, w, { w: 152, h: 40, stroke: col === YELLOW ? YELLOW : '#666', fill: col, size: 19 }));
+  R += ln(1420, 442, 1420, 458, YELLOW, 2, .7) + gpu(1080, 460, 680, 48, .86, YELLOW, { fop: .8 })
+    + tx(1420, 492, 'one GPU, shared', { size: 20, mono: true, anchor: 'middle', fill: INK })
+    + tx(1420, 550, 'batching and sharing, built once', { size: 26, italic: true, anchor: 'middle', fill: GREY });
+  s += grp(r, R);
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 3b · GPU placement
+function actPlace(t) {
+  const v = win(t, T('b0'), T('c0'));
+  if (v <= 0) return '';
+  const c = decide(t, { q: 'Decision 2 · Where does it run?', tq: T('b0'), L: 'one model per GPU', tL: F('b0', .3), R: 'many models, packed', tR: F('b0', .62), tPick: F('b1', .08),
+    rows: [['call', F('b1', .05), 'pack the small models together  ·  big ones get their own GPU'],
+      ['because', T('b2'), 'most of the 200 models are idle most of the day'],
+      ['not', T('b3'), 'a GPU for every model: good isolation  ·  I pay for idle GPUs'],
+      ['unless', T('b4'), 'it is on the payment path, like fraud-v7 (noisy neighbour)  ·  or an LLM that fills the memory']] });
+  let s = c.s, L = '';
+  const loads = [.12, .3, .08, .2, .1, .26, .14, .06];
+  loads.forEach((l, i) => L += grp(fin(t, F('b0', .32) + i * .05), gpu(170 + (i % 4) * 172, 336 + Math.floor(i / 4) * 92, 144, 76, l, BLUE)));
+  L += tx(500, 554, 'isolated · mostly idle', { size: 26, italic: true, anchor: 'middle', fill: GREY, op: fin(t, F('b0', .5)) });
+  s += grp(c.dimL, L);
+  // packed GPUs: stacked model slices
+  const r = fin(t, F('b0', .64));
+  let R = '';
+  [[.2, .16, .22, .14, .14], [.3, .12, .18, .26], [.14, .2, .1, .24, .18]].forEach((segs, i) => {
+    const x = 1076 + i * 150, h = 172;
+    R += box(x, 336, 128, h, { stroke: '#5a5a5a', fill: INK, w: 2, rx: 6 });
+    let yy = 336 + h - 4;
+    segs.forEach((f, k) => { const sh = (h - 8) * f; yy -= sh; R += box(x + 4, yy + 1.5, 120, sh - 3, { fill: YELLOW, rx: 3, op: .5 + .1 * ((k + i) % 4), stroke: 'none' }); });
+  });
+  R += tx(1290, 554, 'small models, packed', { size: 26, italic: true, anchor: 'middle', fill: GREY });
+  s += grp(r, R);
+  const d = fin(t, F('b4', .3));
+  s += grp(d, [0, 1].map(i => gpu(1552 + i * 112, 336, 96, 172, .7, YELLOW, { stroke: YELLOW }) + tx(1600 + i * 112, 470, 'v7', { size: 22, mono: true, anchor: 'middle', fill: INK })).join('')
+    + tx(1656, 554, 'fraud-v7, alone', { size: 26, italic: true, anchor: 'middle', fill: YELLOW }));
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 3c · autoscaling
+function actScale(t) {
+  const v = win(t, T('c0'), T('d0'));
+  if (v <= 0) return '';
+  const c = decide(t, { q: 'Decision 3 · When do I add replicas?', tq: T('c0'), L: 'scale on CPU', tL: F('c0', .5), R: 'scale on queue depth', tR: F('c0', .74), tPick: F('c1', .08),
+    rows: [['call', F('c1', .05), 'scale on requests in flight  ·  never below 2 warm replicas'],
+      ['because', T('c2'), 'the work is on the GPU: CPU stays flat while the queue grows'],
+      ['not', T('c3'), 'CPU scaling reacts late  ·  scale to zero: the first request waits 3 min'],
+      ['unless', T('c4'), 'a batch model: nobody waits  →  it scales to zero']] });
+  let s = c.s;
+  // left: two lines over time
+  const p = eio((t - F('c0', .52)) / 1.6);
+  let L = ln(190, 336, 190, 520, '#555', 2) + ln(190, 520, 820, 520, '#555', 2) + tx(820, 548, 'load →', { size: 20, mono: true, anchor: 'end', fill: '#666' })
+    + drawn('M190 470C400 468 600 462 800 458', p, BLUE, 4) + tx(808, 446, 'CPU', { size: 22, mono: true, anchor: 'end', fill: BLUE, op: fin(t, F('c0', .52) + 1.2) })
+    + drawn('M190 505C420 500 620 440 800 350', p, RED, 4) + tx(700, 372, 'queue', { size: 22, mono: true, anchor: 'end', fill: RED, op: fin(t, F('c0', .52) + 1.2) });
+  s += grp(c.dimL, L);
+  // right: a queue feeding replicas; two are always warm
+  const r = fin(t, F('c0', .76));
+  const grow = clamp((t - F('c2', .5)) / 2.4), nq = Math.round(lerp(6, 24, eio(grow)) * (1 - .6 * fin(t, F('c2', .5) + 2.6, 1.2)));
+  let R = tx(1190, 350, 'in flight', { size: 22, mono: true, anchor: 'middle', fill: GREY });
+  for (let i = 0; i < 24; i++) R += circ(1100 + (i % 6) * 36, 384 + Math.floor(i / 6) * 36, 11, i < nq ? YELLOW : '#2a2a2c', i < nq ? .9 : .6);
+  R += arrow(1316, 438, 1376, GREY, .8);
+  for (let i = 0; i < 6; i++) {
+    const x = 1396 + (i % 3) * 124, y = 352 + Math.floor(i / 3) * 86, warm = i < 2, on = warm ? 1 : fin(t, F('c2', .5) + .5 + (i - 2) * .45);
+    R += box(x, y, 108, 68, { stroke: warm ? YELLOW : '#555', fill: INK, w: 2, rx: 8, dash: warm ? '' : '6 6' })
+      + grp(on, box(x, y, 108, 68, { stroke: YELLOW, fill: warm ? '#4a4116' : '#2c2810', w: 2, rx: 8 }) + tx(x + 54, y + 42, warm ? 'warm' : 'added', { size: 20, mono: true, anchor: 'middle', fill: YELLOW }));
+  }
+  R += tx(1420, 554, '2 warm, always · up to 6 at peak', { size: 26, italic: true, anchor: 'middle', fill: GREY });
+  s += grp(r, R);
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- 3d · rollout, and the first bad one
+function actRoll(t) {
+  const v = win(t, T('d0'), T('f0'));
+  if (v <= 0) return '';
+  const c = decide(t, { q: 'Decision 4 · How does v7 replace v6?', tq: T('d0'), L: 'in one step', tL: F('d0', .62), R: 'in stages', tR: F('d0', .82), tPick: F('d1', .08),
+    rows: [['call', F('d1', .05), 'shadow  →  canary 5%  →  everyone  ·  automatic rollback'],
+      ['because', T('d2'), 'a model can be healthy as a service, and wrong as a model'],
+      ['not', T('d4'), 'one step: fast  ·  every customer gets the bad model'],
+      ['unless', T('d5'), 'the model has no live users']] });
+  let s = c.s;
+  const sw = eio((t - F('d0', .66)) / 1);
+  let L = token(280, 380, 'v6', { w: 180, h: 60, stroke: '#666', fill: GREY, size: 26 }) + arrow(390, 380, 600, BLUE)
+    + token(720, 380, 'v7', { w: 180, h: 60, stroke: BLUE, fill: BLUE, size: 26 })
+    + box(170, 446, 660, 30, { stroke: '#444', w: 2, rx: 6 }) + box(170, 446, 660 * sw, 30, { fill: BLUE, rx: 6, op: .85 })
+    + tx(500, 512, '100% of payments, at once', { size: 26, italic: true, anchor: 'middle', fill: GREY })
+    + tx(500, 552, 'if v7 is wrong, everyone gets it', { size: 26, italic: true, anchor: 'middle', fill: RED, op: fin(t, T('d4')) });
+  s += grp(c.dimL, L);
+  // right: stages, the traffic split, the three gates, the registry
+  const tSh = F('d1', .2), tCa = F('d2', .42), tRb = F('d3', .4), rb = fin(t, tRb, .6);
+  const stage = t >= tRb ? 3 : t >= tCa ? 1 : t >= tSh ? 0 : -1;
+  let R = '';
+  [['shadow', F('d1', .2)], ['canary 5%', F('d1', .38)], ['everyone', F('d1', .6)]].forEach(([w, t0], i) => {
+    const on = stage === i, last = i === 2 && stage === 3;
+    R += grp(lerp(.35, 1, fin(t, t0)), token(1176 + i * 244, 352, last ? '↩ back to v6' : w, { w: 212, h: 42, stroke: last ? GREEN : on ? YELLOW : '#666', bg: on ? '#4a4116' : '#17171a', fill: last ? GREEN : on ? YELLOW : '#bbb', size: 20 }));
+  });
+  const share = .05 * fin(t, tCa, .6) * (1 - rb), W = 700;
+  R += box(1070, 392, W, 26, { fill: '#3f6f7c', rx: 5 }) + box(1070 + W * (1 - share), 392, W * share, 26, { fill: YELLOW, rx: 3 })
+    + tx(1070, 444, 'v6 serves', { size: 20, mono: true, fill: '#7fb6c4' })
+    + tx(1770, 444, stage === 0 ? 'v7: a copy of traffic, answers dropped' : stage === 1 ? 'v7: 5% of payments' : stage === 3 ? 'v7: 0%' : '', { size: 20, mono: true, anchor: 'end', fill: YELLOW });
+  const gate = (y, name, val, ok, t0) => grp(fin(t, t0), tx(1070, y, name, { size: 22, mono: true, fill: '#cfcfcf' }) + tx(1500, y, val, { size: 22, mono: true, anchor: 'end', fill: ok ? GREEN : RED }));
+  R += gate(486, 'latency p99', '48 ms ✓', true, F('d2', .56)) + gate(520, 'error rate', '0.1% ✓', true, F('d2', .68))
+    + gate(554, 'payments blocked', '1% → 3% ✗', false, F('d2', .82));
+  R += grp(fin(t, F('d3', .68)), tx(1650, 468, 'registry', { size: 20, italic: true, anchor: 'middle', fill: GREY })
+    + token(1650, 496, 'v6  unchanged', { w: 220, h: 38, stroke: GREEN, fill: GREEN, size: 19 }) + token(1650, 540, 'v7  kept', { w: 220, h: 38, stroke: '#666', fill: GREY, size: 19 }));
+  s += grp(fin(t, F('d0', .84)), R);
+  return grp(v, s);
+}
+
+// ---------------------------------------------------------------- close: the bad version reached 5%
+function actClose(t) {
+  const a = fin(t, F('e5', 0));
+  if (a <= 0) return '';
+  const X0 = 200, W = 1100;
+  return grp(a, box(X0, 742, W, 34, { fill: '#3f6f7c', rx: 6 }) + box(X0 + W * (1 - .05 * eio((t - T('e5')) / .8)), 742, W * .05 * eio((t - T('e5')) / .8), 34, { fill: YELLOW, rx: 4 })
+    + tx(X0, 818, 'v6 kept serving 95% of payments', { size: 30, italic: true, fill: '#7fb6c4' })
+    + tx(X0 + W, 818, 'bad v7: 5%, then rolled back', { size: 30, italic: true, anchor: 'end', fill: YELLOW }));
+}
+
+// ---------------------------------------------------------------- frame
+const overlays = [...document.querySelectorAll('[data-in]')].map(n => {
+  const d = n.dataset;
+  return { n, t0: F(d.in, +d.f || 0) + (+d.d || 0), t1: d.out ? T(d.out) - .4 : Infinity, dim: d.dim ? T(d.dim) : Infinity, write: n.classList.contains('write') };
+});
+
+function renderAt(t) {
+  t = clamp(t, 0, TL.duration);
+  $('g').innerHTML = modelCard(t) + actHook(t) + actReq(t) + actMath(t) + actPack(t) + actPlace(t) + actScale(t) + actRoll(t) + actClose(t);
+  for (const o of overlays) {
+    const p = ease((t - o.t0) / .5);
+    let op = (o.write ? +(t >= o.t0) : p) * (1 - ease((t - o.t1) / .35));
+    if (t > o.dim) op *= lerp(1, .55, ease((t - o.dim) / .5));
+    o.n.style.opacity = op; o.n.style.visibility = op > 0 ? 'visible' : 'hidden';
+    if (o.write) o.n.style.clipPath = `inset(-20% ${(100 * (1 - eio((t - o.t0) / .9))).toFixed(2)}% -20% 0)`;
+    else o.n.style.transform = `translateY(${((1 - p) * 12).toFixed(2)}px)`;
+  }
+  let cap = '', chip = '';
+  for (const id in cues) if (t >= cues[id].start - .12) cap = cues[id].text;
+  for (const sc of TL.scenes) if (t >= sc.start) chip = sc.chip;
+  $('cap').textContent = cap;
+  $('chip').textContent = chip;
+  $('bar').style.width = (t / TL.duration * 100).toFixed(3) + '%';
+}
+window.renderAt = renderAt;
+
+if (RENDER) {
+  renderAt(0);
+  window.DURATION = TL.duration;
+  document.fonts.ready.then(() => { window.READY = true; });
+} else {
+  const stage = $('stage'), audio = new Audio('narration.wav');
+  const fit = () => {
+    const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+    stage.style.transform = `translate(${(innerWidth - 1920 * s) / 2}px,${(innerHeight - 1080 * s) / 2}px) scale(${s})`;
+  };
+  addEventListener('resize', fit); fit();
+  $('hint').hidden = false;
+  const toggle = () => { $('hint').hidden = true; audio.paused ? audio.play() : audio.pause(); };
+  addEventListener('click', toggle);
+  addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); toggle(); }
+    if (e.code === 'ArrowRight') audio.currentTime += 5;
+    if (e.code === 'ArrowLeft') audio.currentTime -= 5;
+  });
+  (function loop() { renderAt(audio.currentTime); requestAnimationFrame(loop); })();
+}
+</script>
+</body>
+</html>

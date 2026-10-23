@@ -1,0 +1,336 @@
+{
+ "title": "Pagination, worked end to end (3b1b style)",
+ "duration": 254.942,
+ "scenes": [
+  {
+   "id": "hook",
+   "chip": "The duplicate row",
+   "lines": [
+    {
+     "id": "h0",
+     "start": 0.7,
+     "end": 6.105,
+     "text": "Here is a feed. Three tweets per page. You read page one: T1, T2, T3."
+    },
+    {
+     "id": "h1",
+     "start": 6.425,
+     "end": 11.505,
+     "text": "While you scroll, a new tweet arrives at the top. Everything slides down one place."
+    },
+    {
+     "id": "h2",
+     "start": 11.825,
+     "end": 16.006,
+     "text": "Now you ask for page two: skip three. And T3 arrives twice."
+    },
+    {
+     "id": "h3",
+     "start": 16.326,
+     "end": 20.011,
+     "text": "Delete a tweet instead, and one slides past you. You never see it."
+    },
+    {
+     "id": "h4",
+     "start": 20.331,
+     "end": 25.972,
+     "text": "One idea for this whole video. Offset remembers a position. A cursor remembers an item."
+    },
+    {
+     "id": "h5",
+     "start": 26.292,
+     "end": 28.172,
+     "text": "Positions move. Items don't."
+    }
+   ],
+   "start": 0.0,
+   "end": 28.472
+  },
+  {
+   "id": "offset",
+   "chip": "1 \u00b7 Offset",
+   "lines": [
+    {
+     "id": "o0",
+     "start": 28.922,
+     "end": 34.796,
+     "text": "First, offset. The client calls GET /v1/feed, offset 0, limit 50."
+    },
+    {
+     "id": "o1",
+     "start": 35.116,
+     "end": 39.499,
+     "text": "The server runs this SQL: order by time, limit 50, offset 0."
+    },
+    {
+     "id": "o2",
+     "start": 39.819,
+     "end": 43.445,
+     "text": "The client must remember a number, and add 50 to it each time."
+    },
+    {
+     "id": "o2b",
+     "start": 43.765,
+     "end": 50.88,
+     "text": "The reply also carries a total. Counting a sharded table is a scatter-gather. It costs more than the page itself."
+    },
+    {
+     "id": "o3",
+     "start": 51.2,
+     "end": 57.173,
+     "text": "Page two: offset 50. It breaks, because skip 50 meant one set of rows then, and another now."
+    },
+    {
+     "id": "o4",
+     "start": 57.493,
+     "end": 59.007,
+     "text": "The data shifts under the reader."
+    },
+    {
+     "id": "o5",
+     "start": 59.327,
+     "end": 64.329,
+     "text": "It also gets slow. Offset 50 reads 100 rows, and throws away 50."
+    },
+    {
+     "id": "o6",
+     "start": 64.649,
+     "end": 68.539,
+     "text": "At page 40, it reads 2,000 rows to hand back 50."
+    },
+    {
+     "id": "o7",
+     "start": 68.859,
+     "end": 73.401,
+     "text": "Think of a coat on the third hook. Add a hook by the door, and you grab the wrong coat."
+    }
+   ],
+   "start": 28.472,
+   "end": 73.701
+  },
+  {
+   "id": "cursor",
+   "chip": "2 \u00b7 Cursor",
+   "lines": [
+    {
+     "id": "c0",
+     "start": 74.151,
+     "end": 79.326,
+     "text": "Now the cursor. The first call has no cursor. No cursor means start from the top."
+    },
+    {
+     "id": "c1",
+     "start": 79.646,
+     "end": 84.373,
+     "text": "The SQL orders by tweet id, and asks for 51 rows, not 50."
+    },
+    {
+     "id": "c2",
+     "start": 84.693,
+     "end": 89.512,
+     "text": "The extra row tells you there is another page. Return 50, and set has_more."
+    },
+    {
+     "id": "c3",
+     "start": 89.832,
+     "end": 94.001,
+     "text": "The last tweet handed out is 9142. That goes into the cursor."
+    },
+    {
+     "id": "c4",
+     "start": 94.321,
+     "end": 100.585,
+     "text": "Inside, it is plain JSON: id 9142. Base64 makes it look meaningless."
+    },
+    {
+     "id": "c5",
+     "start": 100.905,
+     "end": 106.157,
+     "text": "The ugliness is the feature. Clients can't depend on its shape, so you can change it later."
+    },
+    {
+     "id": "c6",
+     "start": 106.477,
+     "end": 114.41,
+     "text": "Page two hands the blob back untouched. The server decodes it, and adds one line: tweet id below 9142."
+    },
+    {
+     "id": "c7",
+     "start": 114.73,
+     "end": 118.993,
+     "text": "That is the only change. An index seek, 51 rows, at any depth."
+    },
+    {
+     "id": "c8",
+     "start": 119.313,
+     "end": 128.482,
+     "text": "Now replay the insert. A new tweet lands on top. But older than 9142 still means the same rows. No repeat. No skip."
+    },
+    {
+     "id": "c9",
+     "start": 128.802,
+     "end": 136.355,
+     "text": "Sort by timestamp alone, and forty tweets in one millisecond repeat or vanish. So compare time and id as a pair."
+    },
+    {
+     "id": "c10",
+     "start": 136.675,
+     "end": 142.242,
+     "text": "Snowflake IDs are time-ordered and unique. So the id alone is the whole cursor."
+    },
+    {
+     "id": "c11",
+     "start": 142.562,
+     "end": 148.619,
+     "text": "On the last page, has_more is false. A short page is not the signal. has_more is the contract."
+    },
+    {
+     "id": "c11b",
+     "start": 148.939,
+     "end": 153.662,
+     "text": "A page can come back short just because rows were filtered out during hydration."
+    }
+   ],
+   "start": 73.701,
+   "end": 153.962
+  },
+  {
+   "id": "limit",
+   "chip": "3 \u00b7 Where LIMIT goes",
+   "lines": [
+    {
+     "id": "l0",
+     "start": 154.412,
+     "end": 158.723,
+     "text": "Where does LIMIT belong? On what you return. Never on what you filter by."
+    },
+    {
+     "id": "l1",
+     "start": 159.043,
+     "end": 163.925,
+     "text": "The inner query asks: who does u9 follow? The outer query picks the tweets."
+    },
+    {
+     "id": "l2",
+     "start": 164.245,
+     "end": 170.474,
+     "text": "LIMIT 51 on the outer query: the 51 newest tweets, from everyone u9 follows."
+    },
+    {
+     "id": "l3",
+     "start": 170.794,
+     "end": 176.289,
+     "text": "Put LIMIT 100 on the inner query, and nine hundred accounts silently drop out of the feed."
+    },
+    {
+     "id": "l4",
+     "start": 176.609,
+     "end": 180.04,
+     "text": "No error. No warning. Just tweets that never show up."
+    },
+    {
+     "id": "l5",
+     "start": 180.36,
+     "end": 185.094,
+     "text": "And admit it: this query is a teaching shape. The real feed is precomputed."
+    },
+    {
+     "id": "l5b",
+     "start": 185.414,
+     "end": 191.749,
+     "text": "If u9 follows five thousand people, the database scans all their tweets, on every feed open."
+    }
+   ],
+   "start": 153.962,
+   "end": 192.049
+  },
+  {
+   "id": "injoin",
+   "chip": "4 \u00b7 IN or JOIN",
+   "lines": [
+    {
+     "id": "j0",
+     "start": 192.499,
+     "end": 197.676,
+     "text": "IN or JOIN? One question settles it. Do I need any columns from the second table?"
+    },
+    {
+     "id": "j1",
+     "start": 197.996,
+     "end": 203.007,
+     "text": "If not, it is a membership test. Is this author in the set? Use IN, or EXISTS."
+    },
+    {
+     "id": "j1b",
+     "start": 203.327,
+     "end": 208.593,
+     "text": "EXISTS is the safest default when you are only filtering. It stops at the first match."
+    },
+    {
+     "id": "j2",
+     "start": 208.913,
+     "end": 213.28,
+     "text": "Need followed_since? It lives only in follows. So it has to be a join."
+    },
+    {
+     "id": "j3",
+     "start": 213.6,
+     "end": 218.466,
+     "text": "Now the part that bites. A bad migration leaves the same follow row twice."
+    },
+    {
+     "id": "j4",
+     "start": 218.786,
+     "end": 223.608,
+     "text": "The JOIN emits that author's tweets twice. IN still returns each tweet once."
+    },
+    {
+     "id": "j5",
+     "start": 223.928,
+     "end": 229.655,
+     "text": "One more: if the column can be NULL, never use NOT IN. One NULL returns zero rows."
+    },
+    {
+     "id": "j6",
+     "start": 229.975,
+     "end": 233.976,
+     "text": "IN and EXISTS get the same plan. Pick whichever reads more clearly."
+    }
+   ],
+   "start": 192.049,
+   "end": 234.276
+  },
+  {
+   "id": "close",
+   "chip": "5 \u00b7 Say it cold",
+   "lines": [
+    {
+     "id": "e0",
+     "start": 234.726,
+     "end": 235.755,
+     "text": "So, say it cold."
+    },
+    {
+     "id": "e1",
+     "start": 236.075,
+     "end": 244.389,
+     "text": "Offset pagination isn't slow, it's wrong. The feed mutates between page one and page two, so you duplicate and skip rows."
+    },
+    {
+     "id": "e2",
+     "start": 244.709,
+     "end": 250.541,
+     "text": "Opaque cursor over the snowflake tweet ID. Correct under inserts, O(1) at any depth."
+    },
+    {
+     "id": "e3",
+     "start": 250.861,
+     "end": 252.742,
+     "text": "Positions move. Items don't."
+    }
+   ],
+   "start": 234.276,
+   "end": 254.942
+  }
+ ]
+}

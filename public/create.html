@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Create · Video Studio</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/studio.css"></head>
+<body>
+<header class="top"><span class="brand">Video Studio</span><nav><a href="/">Library</a><a href="/create" class="active">Create</a><a href="/knowledge">Knowledge</a></nav></header>
+<main class="wrap">
+  <h1>Create a video</h1>
+  <p class="muted">Fills the brief, starts one build session on your Claude login, and tails its log here. One job at a time. The job runs unattended and stops with the server.</p>
+  <form class="form" id="f">
+    <label>Folder name <input id="folder" type="text" placeholder="company-sd-13-topic-slug" pattern="[a-z0-9][a-z0-9-]{2,60}" required></label>
+    <label>Shared brief <select id="brief"><option value="">none (general topic)</option></select></label>
+    <label>Topic (the question the video must answer, one sentence) <input id="topic" type="text" required></label>
+    <label>Outline (who it is for, sections in order with rough times) <textarea id="outline" required></textarea></label>
+    <label>Extra rules (optional) <textarea id="extra" style="min-height:4rem"></textarea></label>
+    <div><button class="primary" type="submit" id="go">Start build</button> <button type="button" id="cancel" hidden>Cancel job</button> <span id="err" class="muted"></span></div>
+  </form>
+  <h2 style="margin-top:1.5rem">Job <span id="status" class="status"></span></h2>
+  <p id="jobmeta" class="muted"></p>
+  <pre class="log" id="log" data-empty="No job yet. Fill in the form above and press Start build; the build log appears here."></pre>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let es = null;
+async function init() {
+  const briefs = await (await fetch('/api/briefs')).json();
+  for (const b of briefs) { const o = document.createElement('option'); o.value = b.path; o.textContent = `${b.label} (${b.path})`; $('#brief').appendChild(o); }
+  const cur = (await (await fetch('/api/job')).json()).job;
+  if (cur) tail();
+}
+function showStatus(job) {
+  if (!job) { $('#status').textContent = '(none)'; $('#status').className = 'status'; $('#cancel').hidden = true; $('#go').disabled = false; return; }
+  $('#status').textContent = job.status; $('#status').className = `status ${job.status}`;
+  $('#jobmeta').innerHTML = `${esc(job.folder ?? `${job.kind} job`)} · started ${esc(job.startedAt)}${job.endedAt ? ` · ended ${esc(job.endedAt)}` : ''} · $${job.costUsd.toFixed(2)}${job.error ? ` · <span class="status failed">${esc(job.error)}</span>` : ''}${job.status === 'done' && job.folder ? ` · <a href="/v/${esc(job.folder)}">open video</a>` : ''}`;
+  $('#cancel').hidden = job.status !== 'running'; $('#go').disabled = job.status === 'running';
+}
+function fmtLine(raw) {
+  let e; try { e = JSON.parse(raw); } catch { return raw; }
+  const at = e.at ? e.at.slice(11, 19) : '';
+  const stage = /tts\.py/.test(e.input || e.text || '') ? '  [stage: narration]' : /--stills|stills\//.test(e.input || e.text || '') ? '  [stage: stills]' : /render\.mjs [^-]/.test(e.input || e.text || '') ? '  [stage: render]' : '';
+  if (e.type === 'tool') return `${at}  ▸ ${e.name} ${e.input || ''}${stage}`;
+  if (e.type === 'status') return `${at}  ● status ${e.job?.status}`;
+  if (e.type === 'result') return `${at}  ■ result${e.isError ? ' ERROR ' + (e.errors || []).join('; ') : ''} $${(e.costUsd || 0).toFixed(2)}\n${e.text || ''}`;
+  return `${at}  ${e.text || ''}${stage}`;
+}
+function tail() {
+  if (es) es.close();
+  $('#log').textContent = '';
+  es = new EventSource('/api/job/events');
+  es.addEventListener('line', ev => { const { line } = JSON.parse(ev.data); $('#log').textContent += fmtLine(line) + '\n'; $('#log').scrollTop = $('#log').scrollHeight; });
+  es.addEventListener('status', ev => showStatus(JSON.parse(ev.data).job));
+}
+$('#f').addEventListener('submit', async e => {
+  e.preventDefault(); $('#err').textContent = '';
+  const body = { folder: $('#folder').value.trim(), sharedBrief: $('#brief').value || null, topic: $('#topic').value.trim(), outline: $('#outline').value.trim(), extraRules: $('#extra').value };
+  const r = await fetch('/api/job', { method: 'POST', headers: { 'content-type': 'application/json', 'x-studio': '1' }, body: JSON.stringify(body) });
+  const data = await r.json();
+  if (!r.ok) { $('#err').textContent = data.error || `HTTP ${r.status}`; return; }
+  showStatus(data.job); tail();
+});
+$('#cancel').addEventListener('click', async () => { await fetch('/api/job', { method: 'DELETE', headers: { 'x-studio': '1' } }); });
+init();
+</script>
+</body></html>

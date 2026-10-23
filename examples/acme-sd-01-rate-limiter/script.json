@@ -1,0 +1,32 @@
+{
+  "title": "Acme system design 1: a rate limiter for a public API (not rendered yet)",
+  "voice": "am_michael",
+  "speed": 1.1,
+  "scenes": [
+    {
+      "id": "hook",
+      "chip": "One noisy client",
+      "lines": [
+        { "id": "h0", "text": "One client sends ten thousand requests a second. Everyone else slows down." },
+        { "id": "h1", "text": "We need a limit per client. Let's design it." }
+      ]
+    },
+    {
+      "id": "algos",
+      "chip": "Window or bucket",
+      "lines": [
+        { "id": "a0", "text": "A fixed window counts requests per minute. It lets a burst through at the edge." },
+        { "id": "a1", "text": "A sliding window smooths that edge, at the cost of more memory." },
+        { "id": "a2", "text": "A token bucket refills at a steady rate and allows a small, planned burst." }
+      ]
+    },
+    {
+      "id": "store",
+      "chip": "Where the counters live",
+      "lines": [
+        { "id": "s0", "text": "One shared store gives exact counts but adds a network hop to every request." },
+        { "id": "s1", "text": "Counters on each node are fast but drift; sync them every second." }
+      ]
+    }
+  ]
+}

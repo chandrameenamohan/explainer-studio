@@ -1,0 +1,302 @@
+{
+ "title": "System design: deploy and host models (3b1b style)",
+ "voice": "am_michael",
+ "speed": 1.1,
+ "scenes": [
+  {
+   "id": "hook",
+   "chip": "The hand-over",
+   "lines": [
+    {
+     "id": "h0",
+     "text": "Monday morning. The fraud team hands you a trained model: fraud-v7.",
+     "say": "Monday morning. The fraud team hands you a trained model: fraud v seven."
+    },
+    {
+     "id": "h1",
+     "text": "By Friday it must answer every payment, in milliseconds. So must 200 other models.",
+     "say": "By Friday it must answer every payment, in milliseconds. So must two hundred other models."
+    },
+    {
+     "id": "h2",
+     "text": "How do you host them? Let's design it."
+    }
+   ]
+  },
+  {
+   "id": "req",
+   "chip": "1 · Requirements",
+   "lines": [
+    {
+     "id": "r0",
+     "text": "First, requirements. Deploy a model, scale it, roll out versions safely, and share GPUs.",
+     "say": "First, requirements. Deploy a model, scale it, roll out versions safely, and share G P Us."
+    },
+    {
+     "id": "r0b",
+     "text": "Then four questions."
+    },
+    {
+     "id": "r1",
+     "text": "Online or batch? I assume online. So p99 is 50 milliseconds.",
+     "say": "Online or batch? I assume online. So p ninety-nine is fifty milliseconds."
+    },
+    {
+     "id": "r2",
+     "text": "How much traffic? I assume 2,000 requests a second at peak.",
+     "say": "How much traffic? I assume two thousand requests a second at peak."
+    },
+    {
+     "id": "r3",
+     "text": "One model or many? I assume 200 models, from 20 teams.",
+     "say": "One model or many? I assume two hundred models, from twenty teams."
+    },
+    {
+     "id": "r4",
+     "text": "Classic models or LLMs? I assume classic first.",
+     "say": "Classic models or L L Ms? I assume classic first."
+    },
+    {
+     "id": "r5",
+     "text": "I assume a number, say it aloud, and move on."
+    }
+   ]
+  },
+  {
+   "id": "math",
+   "chip": "2 · Numbers",
+   "lines": [
+    {
+     "id": "m0",
+     "text": "Now the numbers. One GPU serves 100 requests a second, one at a time. In batches of 16, 500. So I batch.",
+     "say": "Now the numbers. One G P U serves one hundred requests a second, one at a time. In batches of sixteen, five hundred. So I batch."
+    },
+    {
+     "id": "m1",
+     "text": "2,000 divided by 500 is 4 GPUs. I add half for a failed zone. Six.",
+     "say": "Two thousand divided by five hundred is four G P Us. I add half for a failed zone. Six."
+    },
+    {
+     "id": "m2",
+     "text": "A GPU costs 2 dollars an hour. At full load, that is a tenth of a cent per thousand requests. At 30 percent load, over three times more. So utilization is the cost lever.",
+     "say": "A G P U costs two dollars an hour. At full load, that is a tenth of a cent per thousand requests. At thirty percent load, over three times more. So utilization is the cost lever."
+    },
+    {
+     "id": "m3",
+     "text": "Last. A new replica loads 4 gigabytes, and needs 3 minutes. A spike does not wait. So I keep warm replicas.",
+     "say": "Last. A new replica loads four gigabytes, and needs three minutes. A spike does not wait. So I keep warm replicas."
+    }
+   ]
+  },
+  {
+   "id": "pack",
+   "chip": "3 · Design · packaging",
+   "lines": [
+    {
+     "id": "a0",
+     "text": "Decision one. Packaging. A container per model, or one shared inference server?"
+    },
+    {
+     "id": "a1",
+     "text": "My call: a shared server, Triton. Models arrive as ONNX or TensorRT.",
+     "say": "My call: a shared server, Triton. Models arrive as onix, or Tensor R T."
+    },
+    {
+     "id": "a2",
+     "text": "Because batching and GPU sharing are built once, in the server.",
+     "say": "Because batching and G P U sharing are built once, in the server."
+    },
+    {
+     "id": "a3",
+     "text": "Not a container per model. Every team writes its own server, and each one holds a whole GPU.",
+     "say": "Not a container per model. Every team writes its own server, and each one holds a whole G P U."
+    },
+    {
+     "id": "a4",
+     "text": "Unless the model needs custom Python code. That one gets its own container."
+    },
+    {
+     "id": "a5",
+     "text": "The proof. I moved a 120-GPU cluster, over 100,000 dollars a month, onto Triton. The ML team had to convert models from PyTorch to TensorRT.",
+     "say": "The proof. I moved a one hundred and twenty G P U cluster, over one hundred thousand dollars a month, onto Triton. The M L team had to convert models from Pie Torch to Tensor R T."
+    },
+    {
+     "id": "a6",
+     "text": "So first I measured one model on Triton, to have a number before I asked anyone."
+    },
+    {
+     "id": "a7",
+     "text": "Two models in two months gave about 3x throughput. The rest of the migration funded itself.",
+     "say": "Two models in two months gave about three times the throughput. The rest of the migration funded itself."
+    }
+   ]
+  },
+  {
+   "id": "place",
+   "chip": "3 · Design · GPU placement",
+   "lines": [
+    {
+     "id": "b0",
+     "text": "Decision two. One model per GPU, or many models packed on one?",
+     "say": "Decision two. One model per G P U, or many models packed on one?"
+    },
+    {
+     "id": "b1",
+     "text": "My call: pack the small models together. Big ones get their own GPU.",
+     "say": "My call: pack the small models together. Big ones get their own G P U."
+    },
+    {
+     "id": "b2",
+     "text": "Because most of the 200 models are idle most of the day.",
+     "say": "Because most of the two hundred models are idle most of the day."
+    },
+    {
+     "id": "b3",
+     "text": "Not a GPU for every model. It isolates well. But I pay for idle GPUs.",
+     "say": "Not a G P U for every model. It isolates well. But I pay for idle G P Us."
+    },
+    {
+     "id": "b4",
+     "text": "Unless the model is on the payment path, like fraud-v7. A noisy neighbour breaks its 50 milliseconds. So it gets dedicated GPUs.",
+     "say": "Unless the model is on the payment path, like fraud v seven. A noisy neighbour breaks its fifty milliseconds. So it gets dedicated G P Us."
+    }
+   ]
+  },
+  {
+   "id": "scale",
+   "chip": "3 · Design · autoscaling",
+   "lines": [
+    {
+     "id": "c0",
+     "text": "Decision three. When do I add replicas? On CPU, or on queue depth?",
+     "say": "Decision three. When do I add replicas? On C P U, or on queue depth?"
+    },
+    {
+     "id": "c1",
+     "text": "My call: scale on requests in flight. And never below two warm replicas."
+    },
+    {
+     "id": "c2",
+     "text": "Because the work is on the GPU. CPU stays flat while the queue grows.",
+     "say": "Because the work is on the G P U. C P U stays flat while the queue grows."
+    },
+    {
+     "id": "c3",
+     "text": "Not CPU scaling. It reacts late. And not scale to zero. The first request would wait 3 minutes.",
+     "say": "Not C P U scaling. It reacts late. And not scale to zero. The first request would wait three minutes."
+    },
+    {
+     "id": "c4",
+     "text": "Unless it is a batch model. Nobody waits. It scales to zero."
+    }
+   ]
+  },
+  {
+   "id": "roll",
+   "chip": "3 · Design · rollout",
+   "lines": [
+    {
+     "id": "d0",
+     "text": "Decision four. How does version 7 replace version 6? In one step, or in stages?",
+     "say": "Decision four. How does version seven replace version six? In one step, or in stages?"
+    },
+    {
+     "id": "d1",
+     "text": "My call: stages. Shadow, then a canary at 5 percent, then everyone. With automatic rollback.",
+     "say": "My call: stages. Shadow, then a canary at five percent, then everyone. With automatic rollback."
+    },
+    {
+     "id": "d2",
+     "text": "Because a model can be healthy as a service, and wrong as a model. In the canary, latency is fine. Errors are fine. But it blocks three times more payments."
+    },
+    {
+     "id": "d3",
+     "text": "So the gate watches a quality metric too. It rolls back by itself. Version 6 is still in the registry, unchanged.",
+     "say": "So the gate watches a quality metric too. It rolls back by itself. Version six is still in the registry, unchanged."
+    },
+    {
+     "id": "d4",
+     "text": "Not one step. It is fast. But every customer gets the bad model."
+    },
+    {
+     "id": "d5",
+     "text": "Unless the model has no live users."
+    }
+   ]
+  },
+  {
+   "id": "probes",
+   "chip": "4 · Follow-ups",
+   "lines": [
+    {
+     "id": "f0",
+     "text": "Follow-ups. One team floods the platform. What happens?"
+    },
+    {
+     "id": "f1",
+     "text": "Each team has a quota and its own queue. Over quota, only that team is rejected."
+    },
+    {
+     "id": "f2",
+     "text": "How is an LLM different?",
+     "say": "How is an L L M different?"
+    },
+    {
+     "id": "f3",
+     "text": "Tokens stream back. The server is vLLM, with continuous batching. And capacity is tokens per second.",
+     "say": "Tokens stream back. The server is V L L M, with continuous batching. And capacity is tokens per second."
+    },
+    {
+     "id": "f4",
+     "text": "Self-host the LLM, or call an API?",
+     "say": "Self-host the L L M, or call an A P I?"
+    },
+    {
+     "id": "f5",
+     "text": "Both. I self-host a small Qwen model for one narrow text decision, next to a frontier model API. My rule: below about a third of the volume, do not self-host.",
+     "say": "Both. I self-host a small Kwen model for one narrow text decision, next to a frontier model A P I. My rule: below about a third of the volume, do not self-host."
+    },
+    {
+     "id": "f6",
+     "text": "The registry goes down. Does serving stop?"
+    },
+    {
+     "id": "f7",
+     "text": "No. Replicas already hold their weights. Only new deploys wait."
+    }
+   ]
+  },
+  {
+   "id": "close",
+   "chip": "5 · The design",
+   "lines": [
+    {
+     "id": "e0",
+     "text": "So, the design."
+    },
+    {
+     "id": "e1",
+     "text": "Immutable versions, on a shared inference server."
+    },
+    {
+     "id": "e2",
+     "text": "Small models packed on shared GPUs. Critical ones alone.",
+     "say": "Small models packed on shared G P Us. Critical ones alone."
+    },
+    {
+     "id": "e3",
+     "text": "Scale on queue depth, with warm replicas."
+    },
+    {
+     "id": "e4",
+     "text": "Shadow, canary, everyone, with automatic rollback."
+    },
+    {
+     "id": "e5",
+     "text": "The bad version reached 5 percent of payments. Not all of them.",
+     "say": "The bad version reached five percent of payments. Not all of them."
+    }
+   ]
+  }
+ ]
+}

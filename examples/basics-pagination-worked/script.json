@@ -1,0 +1,256 @@
+{
+ "title": "Pagination, worked end to end (3b1b style)",
+ "voice": "am_michael",
+ "speed": 1.1,
+ "scenes": [
+  {
+   "id": "hook",
+   "chip": "The duplicate row",
+   "lines": [
+    {
+     "id": "h0",
+     "text": "Here is a feed. Three tweets per page. You read page one: T1, T2, T3.",
+     "say": "Here is a feed. Three tweets per page. You read page one: T one, T two, T three."
+    },
+    {
+     "id": "h1",
+     "text": "While you scroll, a new tweet arrives at the top. Everything slides down one place."
+    },
+    {
+     "id": "h2",
+     "text": "Now you ask for page two: skip three. And T3 arrives twice.",
+     "say": "Now you ask for page two: skip three. And T three arrives twice."
+    },
+    {
+     "id": "h3",
+     "text": "Delete a tweet instead, and one slides past you. You never see it."
+    },
+    {
+     "id": "h4",
+     "text": "One idea for this whole video. Offset remembers a position. A cursor remembers an item."
+    },
+    {
+     "id": "h5",
+     "text": "Positions move. Items don't."
+    }
+   ]
+  },
+  {
+   "id": "offset",
+   "chip": "1 \u00b7 Offset",
+   "lines": [
+    {
+     "id": "o0",
+     "text": "First, offset. The client calls GET /v1/feed, offset 0, limit 50.",
+     "say": "First, offset. The client calls get, slash v one, slash feed, offset zero, limit fifty."
+    },
+    {
+     "id": "o1",
+     "text": "The server runs this SQL: order by time, limit 50, offset 0.",
+     "say": "The server runs this sequel: order by time, limit fifty, offset zero."
+    },
+    {
+     "id": "o2",
+     "text": "The client must remember a number, and add 50 to it each time.",
+     "say": "The client must remember a number, and add fifty to it each time."
+    },
+    {
+     "id": "o2b",
+     "text": "The reply also carries a total. Counting a sharded table is a scatter-gather. It costs more than the page itself."
+    },
+    {
+     "id": "o3",
+     "text": "Page two: offset 50. It breaks, because skip 50 meant one set of rows then, and another now.",
+     "say": "Page two: offset fifty. It breaks, because skip fifty meant one set of rows then, and another now."
+    },
+    {
+     "id": "o4",
+     "text": "The data shifts under the reader."
+    },
+    {
+     "id": "o5",
+     "text": "It also gets slow. Offset 50 reads 100 rows, and throws away 50.",
+     "say": "It also gets slow. Offset fifty reads a hundred rows, and throws away fifty."
+    },
+    {
+     "id": "o6",
+     "text": "At page 40, it reads 2,000 rows to hand back 50.",
+     "say": "At page forty, it reads two thousand rows to hand back fifty."
+    },
+    {
+     "id": "o7",
+     "text": "Think of a coat on the third hook. Add a hook by the door, and you grab the wrong coat."
+    }
+   ]
+  },
+  {
+   "id": "cursor",
+   "chip": "2 \u00b7 Cursor",
+   "lines": [
+    {
+     "id": "c0",
+     "text": "Now the cursor. The first call has no cursor. No cursor means start from the top."
+    },
+    {
+     "id": "c1",
+     "text": "The SQL orders by tweet id, and asks for 51 rows, not 50.",
+     "say": "The sequel orders by tweet I D, and asks for fifty-one rows, not fifty."
+    },
+    {
+     "id": "c2",
+     "text": "The extra row tells you there is another page. Return 50, and set has_more.",
+     "say": "The extra row tells you there is another page. Return fifty, and set has more."
+    },
+    {
+     "id": "c3",
+     "text": "The last tweet handed out is 9142. That goes into the cursor.",
+     "say": "The last tweet handed out is nine one four two. That goes into the cursor."
+    },
+    {
+     "id": "c4",
+     "text": "Inside, it is plain JSON: id 9142. Base64 makes it look meaningless.",
+     "say": "Inside, it is plain jason: I D nine one four two. Base sixty-four makes it look meaningless."
+    },
+    {
+     "id": "c5",
+     "text": "The ugliness is the feature. Clients can't depend on its shape, so you can change it later."
+    },
+    {
+     "id": "c6",
+     "text": "Page two hands the blob back untouched. The server decodes it, and adds one line: tweet id below 9142.",
+     "say": "Page two hands the blob back untouched. The server decodes it, and adds one line: tweet I D below nine one four two."
+    },
+    {
+     "id": "c7",
+     "text": "That is the only change. An index seek, 51 rows, at any depth.",
+     "say": "That is the only change. An index seek, fifty-one rows, at any depth."
+    },
+    {
+     "id": "c8",
+     "text": "Now replay the insert. A new tweet lands on top. But older than 9142 still means the same rows. No repeat. No skip.",
+     "say": "Now replay the insert. A new tweet lands on top. But older than nine one four two still means the same rows. No repeat. No skip."
+    },
+    {
+     "id": "c9",
+     "text": "Sort by timestamp alone, and forty tweets in one millisecond repeat or vanish. So compare time and id as a pair.",
+     "say": "Sort by timestamp alone, and forty tweets in one millisecond repeat or vanish. So compare time and I D as a pair."
+    },
+    {
+     "id": "c10",
+     "text": "Snowflake IDs are time-ordered and unique. So the id alone is the whole cursor.",
+     "say": "Snowflake I Ds are time-ordered and unique. So the I D alone is the whole cursor."
+    },
+    {
+     "id": "c11",
+     "text": "On the last page, has_more is false. A short page is not the signal. has_more is the contract.",
+     "say": "On the last page, has more is false. A short page is not the signal. Has more is the contract."
+    },
+    {
+     "id": "c11b",
+     "text": "A page can come back short just because rows were filtered out during hydration."
+    }
+   ]
+  },
+  {
+   "id": "limit",
+   "chip": "3 \u00b7 Where LIMIT goes",
+   "lines": [
+    {
+     "id": "l0",
+     "text": "Where does LIMIT belong? On what you return. Never on what you filter by."
+    },
+    {
+     "id": "l1",
+     "text": "The inner query asks: who does u9 follow? The outer query picks the tweets.",
+     "say": "The inner query asks: who does u nine follow? The outer query picks the tweets."
+    },
+    {
+     "id": "l2",
+     "text": "LIMIT 51 on the outer query: the 51 newest tweets, from everyone u9 follows.",
+     "say": "Limit fifty-one on the outer query: the fifty-one newest tweets, from everyone u nine follows."
+    },
+    {
+     "id": "l3",
+     "text": "Put LIMIT 100 on the inner query, and nine hundred accounts silently drop out of the feed.",
+     "say": "Put limit one hundred on the inner query, and nine hundred accounts silently drop out of the feed."
+    },
+    {
+     "id": "l4",
+     "text": "No error. No warning. Just tweets that never show up."
+    },
+    {
+     "id": "l5",
+     "text": "And admit it: this query is a teaching shape. The real feed is precomputed."
+    },
+    {
+     "id": "l5b",
+     "text": "If u9 follows five thousand people, the database scans all their tweets, on every feed open.",
+     "say": "If u nine follows five thousand people, the database scans all their tweets, on every feed open."
+    }
+   ]
+  },
+  {
+   "id": "injoin",
+   "chip": "4 \u00b7 IN or JOIN",
+   "lines": [
+    {
+     "id": "j0",
+     "text": "IN or JOIN? One question settles it. Do I need any columns from the second table?"
+    },
+    {
+     "id": "j1",
+     "text": "If not, it is a membership test. Is this author in the set? Use IN, or EXISTS."
+    },
+    {
+     "id": "j1b",
+     "text": "EXISTS is the safest default when you are only filtering. It stops at the first match."
+    },
+    {
+     "id": "j2",
+     "text": "Need followed_since? It lives only in follows. So it has to be a join.",
+     "say": "Need followed since? It lives only in follows. So it has to be a join."
+    },
+    {
+     "id": "j3",
+     "text": "Now the part that bites. A bad migration leaves the same follow row twice."
+    },
+    {
+     "id": "j4",
+     "text": "The JOIN emits that author's tweets twice. IN still returns each tweet once."
+    },
+    {
+     "id": "j5",
+     "text": "One more: if the column can be NULL, never use NOT IN. One NULL returns zero rows.",
+     "say": "One more: if the column can be null, never use not in. One null returns zero rows."
+    },
+    {
+     "id": "j6",
+     "text": "IN and EXISTS get the same plan. Pick whichever reads more clearly."
+    }
+   ]
+  },
+  {
+   "id": "close",
+   "chip": "5 \u00b7 Say it cold",
+   "lines": [
+    {
+     "id": "e0",
+     "text": "So, say it cold."
+    },
+    {
+     "id": "e1",
+     "text": "Offset pagination isn't slow, it's wrong. The feed mutates between page one and page two, so you duplicate and skip rows."
+    },
+    {
+     "id": "e2",
+     "text": "Opaque cursor over the snowflake tweet ID. Correct under inserts, O(1) at any depth.",
+     "say": "Opaque cursor over the snowflake tweet I D. Correct under inserts, order one at any depth."
+    },
+    {
+     "id": "e3",
+     "text": "Positions move. Items don't."
+    }
+   ]
+  }
+ ]
+}

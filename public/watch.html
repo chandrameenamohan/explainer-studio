@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Video Studio</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/studio.css"></head>
+<body>
+<header class="top"><span class="brand">Video Studio</span>
+<nav><a href="/">Library</a><a href="/create">Create</a><a href="/knowledge">Knowledge</a></nav>
+<span id="crumb" class="muted"></span>
+<span style="margin-left:auto"><a id="prev" href="#">← prev</a> · <a id="next" href="#">next →</a></span></header>
+<div class="watch">
+  <section class="stage"><video id="player" controls preload="metadata"></video>
+    <div id="noplayer" class="placeholder" hidden>Not rendered yet. The transcript is the script the video will speak.</div></section>
+  <section class="vinfo"><div class="vhead"><h2 id="title"></h2><span class="views" title="Layout (t toggles)"><button id="view-default" type="button">Default</button><button id="view-theater" type="button">Theater</button></span></div><div class="meta muted" id="meta"></div>
+    <div id="concepts" class="concepts"></div>
+    <p><button id="watched">Mark watched</button> <span id="saved" class="muted"></span></p>
+    <p id="norender" class="muted" hidden>This folder has no rendered mp4 yet, so times are estimates and lines do not seek. <button id="retry">Retry build from brief.md</button></p>
+    <div id="joblog" hidden><div class="muted">Last job log lines</div><pre class="log"></pre></div></section>
+  <aside class="rail">
+    <section class="tpane"><div class="transcript" id="transcript"></div></section>
+    <section class="chat"><div class="log" id="chatlog"></div>
+      <form id="chatform"><textarea id="chatq" placeholder="Ask about this video"></textarea><button class="primary" type="submit">Ask</button><button id="chatreset" type="button" title="Start a new conversation">New</button></form></section>
+  </aside>
+</div>
+<dialog id="cmodal" class="cmodal"><form id="cm-form" method="dialog" novalidate>
+  <h3 id="cm-head">Save concept</h3>
+  <div id="cm-note" class="muted" hidden></div>
+  <div id="cm-err" class="error" hidden></div>
+  <div id="cm-fields">
+  <label>Title <input type="text" id="cm-title" required autocomplete="off"></label>
+  <label>Slug <input type="text" id="cm-slug" autocomplete="off" spellcheck="false"><span id="cm-slugnote" class="muted small"></span></label>
+  <label>In my words <textarea id="cm-words" required rows="4"></textarea></label>
+  </div>
+  <label>Quote <textarea id="cm-quote" rows="2"></textarea></label>
+  <div class="cm-row"><label>Time <input type="text" id="cm-t" placeholder="m:ss" autocomplete="off"></label>
+    <label id="cm-statuswrap">Status <select id="cm-status"><option value="fuzzy">fuzzy</option><option value="learning" selected>learning</option><option value="known">known</option></select></label></div>
+  <fieldset><legend>Companies</legend><div id="cm-companies" class="cm-companies"></div></fieldset>
+  <label id="cm-relwrap">Related <input type="text" id="cm-related" list="cm-related-list" placeholder="titles, comma-separated" autocomplete="off"><datalist id="cm-related-list"></datalist></label>
+  <div class="cm-actions"><button type="button" id="cm-cancel">Cancel</button><button type="submit" class="primary" id="cm-save">Save</button></div>
+</form></dialog>
+<div id="toast" class="toast" hidden></div>
+<script>
+const KIND_LABELS = { primer:'Primer', sd:'System design', beh:'Behavioral', code:'Coding', hm:'Hiring manager', mgr:'Manager round', loop:'Loop', next:'Next round', other:'Other' };
+const folder = decodeURIComponent(location.pathname.split('/')[2]);
+const params = new URLSearchParams(location.search);
+const $ = s => document.querySelector(s);
+const fmt = s => s == null ? '' : `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let record = null, state = null, lines = [];
+const player = $('#player');
+
+async function load() {
+  const v = await (await fetch(`/api/video/${encodeURIComponent(folder)}`)).json();
+  record = v.record; state = v.state;
+  document.title = `${record.title} · Video Studio`;
+  $('#title').textContent = record.title;
+  $('#crumb').textContent = `${record.company} · ${KIND_LABELS[record.kind] || record.kind}${record.nn ? ' #' + record.nn : ''}`;
+  $('#meta').textContent = `${record.folder} · ${fmt(record.durationSec)}`;
+  $('#prev').href = v.neighbours.prev ? `/v/${v.neighbours.prev}` : '#';
+  $('#next').href = v.neighbours.next ? `/v/${v.neighbours.next}` : '#';
+  renderWatched();
+  if (record.mp4) { player.src = `/media/${encodeURIComponent(folder)}/video.mp4`; } else { player.hidden = true; $('#noplayer').hidden = false; $('#transcript').classList.add('static'); $('#norender').hidden = false; $('#retry').hidden = !record.hasBrief; showJobLog(); }
+  lines = [];
+  $('#transcript').innerHTML = record.scenes.map((s, si) => `<div class="scene">${esc(s.chip)}</div>` + s.lines.map((l, li) => { lines.push({ ...l, chip: s.chip }); return `<div class="line" data-key="${l.key}" data-start="${l.start ?? ''}"><span class="t">${fmt(l.start)}</span><span class="txt">${esc(l.text)}</span><button class="plus" type="button" title="Save concept from this line">+</button></div>`; }).join('')).join('');
+  const t = params.get('t'); const startAt = t != null ? Number(t) : (state.positionSec > 2 && state.positionSec < (record.durationSec || 1e9) - 5 ? state.positionSec : 0);
+  player.addEventListener('loadedmetadata', () => { if (startAt > 0) player.currentTime = startAt; highlight(); }, { once: true });
+  if (params.get('line')) { const el = document.querySelector(`.line[data-key="${params.get('line')}"]`); if (el) centerLine(el, 'auto'); }
+}
+function renderWatched() { $('#watched').textContent = state.watched ? 'Watched ✓ (unmark)' : 'Mark watched'; }
+async function showJobLog() {
+  const { lines } = await (await fetch(`/api/video/${encodeURIComponent(folder)}/joblog`)).json();
+  if (!lines.length) return;
+  $('#joblog').hidden = false;
+  $('#joblog pre').textContent = lines.map(l => { try { const e = JSON.parse(l); return `${(e.at || '').slice(11, 19)}  ${e.type}  ${e.text || e.name || e.job?.status || ''}`; } catch { return l; } }).join('\n');
+}
+window.seekTo = sec => { player.currentTime = sec; player.play().catch(() => {}); };
+window.currentTime = () => player.currentTime;
+window.currentLine = () => { const t = player.currentTime; let best = null; for (const l of lines) { if (l.start != null && l.start <= t && (l.end == null || t < l.end + 0.3)) best = l; } return best; };
+function centerLine(el, behavior) { const box = $('#transcript'); box.scrollTo({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top - box.clientHeight / 2 + el.offsetHeight / 2, behavior }); }
+function setView(v) { const th = v === 'theater'; $('.watch').classList.toggle('theater', th); $('#view-theater').classList.toggle('on', th); $('#view-default').classList.toggle('on', !th); try { localStorage['studio.view'] = th ? 'theater' : 'default'; } catch {} const cur = document.querySelector('.line.now'); if (cur) centerLine(cur, 'auto'); }
+let savedView = 'default'; try { savedView = localStorage['studio.view'] || 'default'; } catch {}
+setView(savedView);
+$('#view-default').addEventListener('click', () => setView('default'));
+$('#view-theater').addEventListener('click', () => setView('theater'));
+function highlight() {
+  const cur = window.currentLine();
+  for (const el of document.querySelectorAll('.line.now')) el.classList.remove('now');
+  if (cur) { const el = document.querySelector(`.line[data-key="${cur.key}"]`); if (el) { el.classList.add('now'); const box = $('#transcript'); const r = el.getBoundingClientRect(), b = box.getBoundingClientRect(); if (r.top < b.top + 40 || r.bottom > b.bottom - 40) centerLine(el, 'smooth'); } }
+}
+let lastSave = 0;
+async function save(patch) { const s = await (await fetch(`/api/video/${encodeURIComponent(folder)}/state`, { method: 'PUT', headers: { 'content-type': 'application/json', 'x-studio': '1' }, body: JSON.stringify(patch) })).json(); state = s; $('#saved').textContent = `saved ${fmt(s.positionSec)}`; }
+player.addEventListener('timeupdate', () => { highlight(); const now = Date.now(); if (now - lastSave > 5000) { lastSave = now; save({ positionSec: player.currentTime }); } });
+player.addEventListener('pause', () => save({ positionSec: player.currentTime }));
+player.addEventListener('ended', () => { state.watched = true; renderWatched(); save({ positionSec: 0, watched: true }); });
+$('#transcript').addEventListener('click', e => { const el = e.target.closest('.line'); if (el && e.target.closest('.plus')) { window.openLineConcept?.(el.dataset.key); return; } if (el && el.dataset.start !== '') window.seekTo(Number(el.dataset.start)); });
+$('#watched').addEventListener('click', async () => { await save({ watched: !state.watched }); renderWatched(); });
+$('#retry').addEventListener('click', async () => { const r = await fetch('/api/job/retry', { method: 'POST', headers: { 'content-type': 'application/json', 'x-studio': '1' }, body: JSON.stringify({ folder }) }); if (r.ok) location.href = '/create'; else alert((await r.json()).error); });
+document.addEventListener('keydown', e => { if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || $('#cmodal').open) return; if (e.key === ' ') { e.preventDefault(); player.paused ? player.play() : player.pause(); } if (e.key === 'ArrowLeft') player.currentTime -= 5; if (e.key === 'ArrowRight') player.currentTime += 5; if (e.key === 't' && !e.metaKey && !e.ctrlKey && !e.altKey) setView($('.watch').classList.contains('theater') ? 'default' : 'theater'); });
+load();
+</script>
+<script>
+const log = $('#chatlog'), form = $('#chatform'), qbox = $('#chatq');
+let busy = false;
+function linkTimes(text) {
+  return esc(text).replace(/@(\d+):(\d\d)/g, (m, mm, ss) => `<a class="seek" href="#" data-sec="${Number(mm) * 60 + Number(ss)}">@${mm}:${ss}</a>`)
+    .replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/^[-*] /gm, '• ');
+}
+function addMsg(cls, html) { log.querySelector('.empty')?.remove(); const d = document.createElement('div'); d.className = `msg ${cls}`; d.innerHTML = html; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
+function renderHistory() {
+  log.innerHTML = '';
+  if (!(state.chat?.messages || []).length) log.innerHTML = '<div class="empty">Ask about this video. The question is sent with the moment you are watching, and answers can link to times such as @1:30.</div>';
+  let lastQ = '';
+  for (const m of (state.chat?.messages || [])) { const d = addMsg(m.role, (m.role === 'user' && m.t != null ? `<span class="tool">at ${fmt(m.t)}</span><br>` : '') + linkTimes(m.text)); if (m.role === 'user') lastQ = m.text; else addSaveConcept(d, { question: lastQ, answer: m.text, t: m.t }); }
+}
+function addSaveConcept(d, draft) { if (!draft.answer) return; d._draft = draft; const b = document.createElement('button'); b.type = 'button'; b.className = 'savec'; b.textContent = 'Save concept'; d.appendChild(document.createElement('br')); d.appendChild(b); }
+log.addEventListener('click', e => { const b = e.target.closest('button.savec'); if (b) { const d = b.closest('.msg'); window.openDraftConcept?.({ ...d._draft, t: d._draft.t ?? window.currentTime() }); return; } const a = e.target.closest('a.seek'); if (a) { e.preventDefault(); window.seekTo(Number(a.dataset.sec)); } });
+form.addEventListener('submit', async e => {
+  e.preventDefault(); if (busy) return;
+  const question = qbox.value.trim(); if (!question) return;
+  qbox.value = ''; busy = true; form.querySelector('button.primary').disabled = true;
+  const t = record.mp4 ? window.currentTime() : null;
+  addMsg('user', `<span class="tool">at ${fmt(t || 0)}</span><br>${esc(question)}`);
+  const a = addMsg('assistant', '<span class="muted">…</span>'); let text = ''; let tools = '';
+  try {
+    const r = await fetch(`/api/video/${encodeURIComponent(folder)}/chat`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-studio': '1' }, body: JSON.stringify({ question, t }) });
+    if (!r.ok) { a.className = 'msg error'; a.textContent = (await r.json()).error || `HTTP ${r.status}`; return; }
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        const ev = /^event: (.+)$/m.exec(chunk)?.[1]; const dataLine = /^data: (.+)$/m.exec(chunk)?.[1]; if (!ev || !dataLine) continue;
+        const data = JSON.parse(dataLine);
+        if (ev === 'delta') { text += data.text; a.innerHTML = linkTimes(text) + tools; }
+        else if (ev === 'tool') { tools = `<div class="tool">reading ${esc(data.path || data.name)}</div>`; a.innerHTML = linkTimes(text) + tools; }
+        else if (ev === 'notice') addMsg('notice', esc(data.text));
+        else if (ev === 'error') { addMsg('error', esc(data.message)); }
+        else if (ev === 'done') { if (!text && data.text) text = data.text; a.innerHTML = linkTimes(text) || '<span class="muted">(no answer)</span>'; addSaveConcept(a, { question, answer: text.trim(), t }); }
+      }
+    }
+  } catch (err) { addMsg('error', esc(String(err))); }
+  finally { busy = false; form.querySelector('button.primary').disabled = false; qbox.focus(); }
+});
+qbox.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
+$('#chatreset').addEventListener('click', async () => { await fetch(`/api/video/${encodeURIComponent(folder)}/chat/reset`, { method: 'POST', headers: { 'x-studio': '1' } }); state.chat = { sessionId: null, messages: [] }; renderHistory(); addMsg('notice', 'New conversation.'); });
+const _load = load; // history renders after the first load resolves
+(async () => { while (!state) await new Promise(r => setTimeout(r, 50)); renderHistory(); })();
+</script>
+<script>
+// knowledge: concept strip under the title, Save concept modal (from a line, from a chat answer, or s)
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,60}$/;
+const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 61).replace(/-+$/, '');
+const parseT = s => { s = s.trim(); if (!s) return null; const m = /^(\d+):([0-5]?\d)$/.exec(s); if (m) return Number(m[1]) * 60 + Number(m[2]); return /^\d+(\.\d+)?$/.test(s) ? Math.round(Number(s)) : NaN; };
+const H = { 'content-type': 'application/json', 'x-studio': '1' };
+const cm = $('#cmodal');
+let kn = null, existing = null, slugTouched = false, cmSeq = 0, cmT = null;
+// mirrors companyKey(): a series is a company only if the catalog's company list has it
+const myCompany = () => !record.unsorted && kn?.companiesInCatalog.some(c => c.key === record.series) ? record.series : 'general';
+const byTitle = () => { const m = new Map(); for (const c of kn?.concepts || []) { m.set(c.title.toLowerCase(), c.slug); for (const a of c.aliases || []) m.set(a.toLowerCase(), c.slug); } return m; };
+async function loadKnowledge() {
+  try { const r = await fetch('/api/knowledge'); if (!r.ok) throw new Error(`HTTP ${r.status}`); kn = await r.json(); } catch (e) { $('#concepts').innerHTML = `<span class="muted">Concepts unavailable: ${esc(String(e.message || e))}</span>`; return; }
+  renderStrip();
+  $('#cm-related-list').innerHTML = kn.concepts.map(c => `<option value="${esc(c.title)}"></option>`).join('');
+  $('#cm-companies').innerHTML = kn.companiesInCatalog.map(c => `<label class="cm-co"><input type="checkbox" value="${esc(c.key)}"> ${esc(c.title)}</label>`).join('');
+}
+function renderStrip() {
+  const slugs = kn.byVideo[folder] || [];
+  const cs = slugs.map(s => kn.concepts.find(c => c.slug === s)).filter(Boolean);
+  $('#concepts').innerHTML = cs.length ? cs.map(c => `<a class="chip concept" href="/k/${encodeURIComponent(c.slug)}" data-slug="${esc(c.slug)}" title="${esc(c.status)}"><span class="dot ${esc(c.status)}"></span>${esc(c.title)}</a>`).join('')
+    : '<span class="muted">No concepts saved from this video yet. Press + on a line or Save concept under an answer.</span>';
+}
+function markSources(slug) {
+  for (const el of document.querySelectorAll('.line.src')) el.classList.remove('src');
+  const c = slug && kn?.concepts.find(x => x.slug === slug); if (!c) return;
+  const ts = new Set(c.sources.filter(s => s.folder === folder && s.t != null).map(s => s.t));
+  for (const el of document.querySelectorAll('.transcript .line')) if (el.dataset.start !== '' && ts.has(Math.round(Number(el.dataset.start)))) el.classList.add('src');
+}
+$('#concepts').addEventListener('mouseover', e => { const a = e.target.closest('a.concept'); if (a) markSources(a.dataset.slug); });
+$('#concepts').addEventListener('mouseout', e => { const a = e.target.closest('a.concept'); if (a && !a.contains(e.relatedTarget)) markSources(null); });
+
+function setMode(ex) {
+  existing = ex;
+  $('#cm-head').textContent = ex ? `Add this moment to ${ex.title}` : 'Save concept';
+  $('#cm-fields').hidden = !!ex; $('#cm-statuswrap').hidden = !!ex; $('#cm-relwrap').hidden = !!ex;
+  $('#cm-save').textContent = ex ? 'Add moment' : 'Save';
+}
+function note(text) { $('#cm-note').textContent = text || ''; $('#cm-note').hidden = !text; }
+function err(text) { $('#cm-err').textContent = text || ''; $('#cm-err').hidden = !text; }
+function openModal(card) { cmSeq++; setMode(null); note(''); err(''); fill(card); if (!cm.open) cm.showModal(); $('#cm-title').focus(); }
+function fill(card) {
+  slugTouched = false;
+  $('#cm-title').value = card.title || ''; $('#cm-slug').value = card.slug || ''; $('#cm-slugnote').textContent = '';
+  $('#cm-words').value = ''; $('#cm-words').placeholder = card.definition || 'Explain it as you would to an interviewer.';
+  $('#cm-quote').value = card.quote || ''; cmT = card.t ?? null; $('#cm-t').value = cmT != null ? fmt(cmT) : '';
+  $('#cm-status').value = 'learning';
+  const cos = new Set(card.companies || [myCompany()]);
+  for (const i of document.querySelectorAll('#cm-companies input')) i.checked = cos.has(i.value);
+  const titleOf = s => kn?.concepts.find(c => c.slug === s)?.title || s;
+  $('#cm-related').value = (card.related || []).map(titleOf).join(', ');
+}
+window.openLineConcept = key => { const l = lines.find(x => x.key === key) || lines[0]; if (!l) return; openModal({ quote: l.text, t: l.start, companies: [myCompany()] }); };
+window.openDraftConcept = async ({ question, answer, t }) => {
+  openModal({ t, companies: [myCompany()] }); const seq = cmSeq; note('Drafting…'); $('#cm-save').disabled = true;
+  try {
+    const r = await fetch('/api/knowledge/draft', { method: 'POST', headers: H, body: JSON.stringify({ folder, t: t ?? null, question: question || '', answer }) });
+    const j = await r.json().catch(() => ({}));
+    if (seq !== cmSeq) return;
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const d = j.draft; const words = $('#cm-words').value;
+    fill({ ...d, t: d.t ?? t }); $('#cm-words').value = words; checkSlug();
+  } catch (e) { if (seq === cmSeq) err(`Draft failed: ${e.message || e}`); }
+  finally { if (seq === cmSeq) { note(''); $('#cm-save').disabled = false; } }
+};
+$('#cm-title').addEventListener('input', () => { if (!slugTouched) $('#cm-slug').value = slugify($('#cm-title').value); checkSlug(); });
+$('#cm-slug').addEventListener('input', () => { slugTouched = true; checkSlug(); });
+function checkSlug() { const s = $('#cm-slug').value.trim(); const ok = !s || SLUG_RE.test(s); $('#cm-slugnote').textContent = ok ? '' : 'lowercase letters, digits and dashes, 2 to 61 chars'; $('#cm-slug').classList.toggle('bad', !ok); return ok; }
+$('#cm-cancel').addEventListener('click', () => { cmSeq++; cm.close(); });
+cm.addEventListener('close', () => { cmSeq++; $('#cm-save').disabled = false; });
+
+function payload() {
+  const raw = $('#cm-t').value; const t = cmT != null && raw.trim() === fmt(cmT) ? cmT : parseT(raw); if (Number.isNaN(t)) throw new Error('time must be m:ss'); // keep the exact line start unless edited
+  const companies = [...document.querySelectorAll('#cm-companies input:checked')].map(i => i.value);
+  return { source: { folder, t, quote: $('#cm-quote').value.trim() }, companies };
+}
+async function send(method, url, body) { const r = await fetch(url, { method, headers: H, body: JSON.stringify(body) }); return { ok: r.ok, status: r.status, j: await r.json().catch(() => ({})) }; }
+$('#cm-form').addEventListener('submit', async e => {
+  e.preventDefault(); err('');
+  let p; try { p = payload(); } catch (x) { err(x.message); return; }
+  $('#cm-save').disabled = true;
+  try {
+    if (existing) {
+      const todo = p.companies.filter(c => !existing.companies.includes(c));
+      let r = await send('PATCH', `/api/knowledge/concepts/${encodeURIComponent(existing.slug)}`, { addSource: p.source, ...(todo.length ? { addCompany: { company: todo[0], why: '' } } : {}) });
+      for (const c of todo.slice(1)) { if (!r.ok) break; r = await send('PATCH', `/api/knowledge/concepts/${encodeURIComponent(existing.slug)}`, { addCompany: { company: c, why: '' } }); }
+      if (!r.ok) throw new Error(r.j.error || `HTTP ${r.status}`);
+      return done(existing.title, existing.slug);
+    }
+    const title = $('#cm-title').value.trim(), words = $('#cm-words').value.trim();
+    let slug = $('#cm-slug').value.trim() || slugify(title);
+    if (!title) throw new Error('title required');
+    if (!words) throw new Error('write it in your own words first');
+    if (!SLUG_RE.test(slug)) throw new Error('slug must be lowercase letters, digits and dashes, 2 to 61 chars');
+    const map = byTitle();
+    const related = [...new Set($('#cm-related').value.split(',').map(x => x.trim()).filter(Boolean).map(x => map.get(x.toLowerCase()) || (SLUG_RE.test(x) ? x : null)).filter(s => s && s !== slug))].map(to => ({ type: 'related', to }));
+    const r = await send('POST', '/api/knowledge/concepts', { title, slug, inMyWords: words, status: $('#cm-status').value, sources: [p.source], companies: p.companies.map(company => ({ company, why: '' })), related });
+    if (r.status === 409 && r.j.existing) {
+      const ex = kn?.concepts.find(c => c.slug === r.j.existing) || (await (await fetch(`/api/knowledge/concepts/${encodeURIComponent(r.j.existing)}`)).json()).concept;
+      setMode({ slug: ex.slug, title: ex.title, companies: (ex.companies || []).map(c => c.company) });
+      note(`A concept with slug ${ex.slug} already exists. Save adds this moment to it.`); return;
+    }
+    if (r.status === 409 && r.j.suggestion) { $('#cm-slug').value = r.j.suggestion; slugTouched = true; checkSlug(); $('#cm-slugnote').textContent = `${slug} is taken by a ${r.j.error.replace(/^.* is a (\w+) name$/, '$1')}; suggested ${r.j.suggestion}.`; return; }
+    if (!r.ok) throw new Error(r.j.error || `HTTP ${r.status}`);
+    return done(r.j.concept.title, r.j.concept.slug);
+  } catch (x) { err(x.message || String(x)); }
+  finally { $('#cm-save').disabled = false; }
+});
+let toastTimer = 0;
+async function done(title, slug) {
+  cm.close();
+  const t = $('#toast'); t.innerHTML = `Saved <a href="/k/${encodeURIComponent(slug)}">${esc(title)}</a>`; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
+  await loadKnowledge();
+}
+document.addEventListener('keydown', e => {
+  if (e.key !== 's' || e.metaKey || e.ctrlKey || e.altKey || cm.open) return;
+  const tag = e.target.tagName; if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT' || e.target.isContentEditable) return;
+  e.preventDefault(); window.openLineConcept(window.currentLine()?.key);
+});
+(async () => { while (!record) await new Promise(r => setTimeout(r, 50)); loadKnowledge(); })();
+</script>
+</body></html>

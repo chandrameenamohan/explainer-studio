@@ -1,0 +1,1 @@
+{ "repoRoot": "../..", "videoRoot": "../../examples", "stateDir": "/tmp/studio-test-state", "port": 4999, "host": "127.0.0.1", "model": null, "claudePath": null, "chatConcurrency": 1, "chatBudgetUsd": 0.1, "jobBudgetUsd": 1 }

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Concept - Video Studio</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/studio.css">
+<style>
+.cp { max-width:860px; margin:0 auto; display:flex; flex-direction:column; gap:1.1rem; }
+.cp h2 { font-size:1rem; color:var(--yellow); margin:0 0 .4rem; }
+.cp .row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+.cp .def { font-style:italic; color:var(--muted); margin:0; }
+.cp select { width:auto; }
+.cp textarea { min-height:9rem; }
+.cp ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.4rem; }
+.cp li .q { color:var(--muted); border-left:2px solid var(--blue); padding-left:.5rem; margin-left:.4rem; }
+.cp .rm { padding:0 .45rem; margin-left:.4rem; color:var(--muted); }
+.cp a.unresolved { border-bottom:1px dashed var(--muted); color:var(--muted); }
+.cp .grp { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.05em; margin:.4rem 0 .2rem; }
+.cp .md h3,.cp .md h4 { margin:.6rem 0 .2rem; } .cp .md blockquote { margin:.3rem 0; padding-left:.6rem; border-left:2px solid var(--line); color:var(--muted); }
+.cp .md p { margin:.3rem 0; } .cp .md ul { list-style:disc; padding-left:1.2rem; }
+.cp .danger { color:var(--red); border-color:var(--red); }
+.cp .chip { cursor:default; }
+</style></head>
+<body>
+<header class="top"><span class="brand">Video Studio</span>
+<nav><a href="/">Library</a><a href="/create">Create</a><a href="/knowledge">Knowledge</a></nav></header>
+<main class="wrap"><div class="cp" id="cp" hidden>
+  <div><h1 id="title"></h1>
+    <div class="muted" id="path"></div></div>
+  <div class="row"><select id="status"><option>fuzzy</option><option>learning</option><option>known</option></select>
+    <span class="tag" id="origin"></span><a id="obsidian" href="#">Open in Obsidian</a>
+    <button id="delete" class="danger" style="margin-left:auto">Delete</button></div>
+  <p class="def" id="def" hidden></p>
+  <section><h2>In my words</h2><textarea id="words"></textarea>
+    <div class="row" style="margin-top:.4rem"><button id="savewords" class="primary">Save</button><span id="wordsmsg" class="muted"></span></div></section>
+  <section><h2>From the videos</h2><ul id="sources"></ul></section>
+  <section><h2>Companies</h2><div class="chips" id="companies"></div></section>
+  <section><h2>Related</h2><div id="related"></div>
+    <div class="row" style="margin-top:.5rem"><select id="reltype"></select>
+      <input type="text" id="reltarget" list="titles" placeholder="concept slug or title" style="width:16rem"><datalist id="titles"></datalist>
+      <button id="reladd">Add</button><span id="relmsg" class="muted"></span></div></section>
+  <section><h2>Backlinks</h2><ul id="backlinks"></ul></section>
+  <section id="simsec" hidden><h2>Similar titles</h2><ul id="similar"></ul></section>
+  <section id="othersec" hidden><div class="md" id="other"></div></section>
+</div><p id="err" class="muted"></p></main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = s => s == null ? '' : `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const TYPES = ['prerequisite','contrast','example','part-of','related'];
+const slug = decodeURIComponent(location.pathname.split('/').pop());
+const url = '/api/knowledge/concepts/' + encodeURIComponent(slug);
+let data, all = [];
+$('#reltype').innerHTML = TYPES.map(t => `<option>${t}</option>`).join('');
+const send = (method, body) => fetch(url, { method, headers: { 'content-type': 'application/json', 'x-studio': '1' }, body: body && JSON.stringify(body) });
+async function patch(body) {
+  const r = await send('PATCH', { ...body, expectMtimeMs: data.concept.mtimeMs });
+  if (r.status === 409) { $('#wordsmsg').textContent = 'Changed on disk, reloading'; await load(); $('#wordsmsg').textContent = 'Changed on disk, reloading'; return null; }
+  if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.error || r.status); return null; }
+  await load(); return r;
+}
+// tiny markdown: headings, bullets, blockquotes, paragraphs, [[x]] links; everything escaped first
+function inline(s) {
+  return esc(s).replace(/\[\[([^\]]+)\]\]/g, (m, t) => {
+    const target = t.split('|')[0].split('#')[0].split('/').pop().trim(); const label = t.includes('|') ? t.split('|').slice(1).join('|') : t;
+    return `<a href="/k/${encodeURIComponent(target)}">${label}</a>`;
+  });
+}
+function md(src) {
+  let out = '', list = false;
+  const close = () => { if (list) { out += '</ul>'; list = false; } };
+  for (const line of src.split('\n')) {
+    let m;
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) { close(); const n = Math.min(4, Math.max(3, m[1].length + 1)); out += `<h${n}>${inline(m[2])}</h${n}>`; }
+    else if ((m = /^\s*[-*]\s+(.*)$/.exec(line))) { if (!list) { out += '<ul>'; list = true; } out += `<li>${inline(m[1])}</li>`; }
+    else if ((m = /^>\s?(.*)$/.exec(line))) { close(); out += `<blockquote>${inline(m[1])}</blockquote>`; }
+    else if (line.trim()) { close(); out += `<p>${inline(line)}</p>`; }
+    else close();
+  }
+  close(); return out;
+}
+const titleOf = s => all.find(c => c.slug === s)?.title ?? s;
+function render() {
+  const c = data.concept;
+  document.title = c.title + ' - Video Studio';
+  $('#title').textContent = c.title;
+  $('#path').textContent = `${c.slug} · concepts/${c.slug}.md` + (c.file && !c.file.endsWith(`/${c.slug}.md`) ? ` · file ${c.file.split('/').pop()}` : '');
+  $('#status').value = c.status; $('#origin').textContent = c.origin;
+  $('#obsidian').href = data.obsidianUrl;
+  $('#def').hidden = !c.definition; $('#def').textContent = c.definition;
+  $('#words').value = c.inMyWords;
+  $('#sources').innerHTML = c.sources.map((s, i) => {
+    const title = data.sourceTitles[s.folder] || s.folder;
+    const at = s.t == null ? '' : ` <a class="seek" href="/v/${encodeURIComponent(s.folder)}?t=${s.t}">@${fmt(s.t)}</a>`;
+    return `<li><a href="/v/${encodeURIComponent(s.folder)}">${esc(title)}</a>${at}<button class="rm" data-i="${i}" title="Remove source">×</button>${s.quote ? `<div class="q">${esc(s.quote)}</div>` : ''}</li>`;
+  }).join('') || '<li class="muted">No sources yet.</li>';
+  $('#companies').innerHTML = c.companies.map(x => `<span class="chip" title="${esc(x.why)}">${esc(x.company)}${x.why ? ' · ' + esc(x.why) : ''}</span>`).join('') || '<span class="muted">None.</span>';
+  const unres = new Set(c.unresolved || []);
+  $('#related').innerHTML = TYPES.filter(t => c.related.some(r => r.type === t)).map(t =>
+    `<div class="grp">${t}</div><div class="chips">` + c.related.filter(r => r.type === t).map(r =>
+      unres.has(r.to) ? `<a class="chip unresolved" href="/k/${encodeURIComponent(r.to)}" title="no file yet">${esc(r.to)}</a>`
+        : `<a class="chip" href="/k/${encodeURIComponent(r.to)}">${esc(titleOf(r.to))}</a>`).join('') + '</div>').join('') || '<span class="muted">None.</span>';
+  $('#backlinks').innerHTML = (c.backlinks || []).map(b => `<li><a href="/k/${encodeURIComponent(b)}">${esc(titleOf(b))}</a></li>`).join('') || '<li class="muted">Nothing links here yet.</li>';
+  $('#simsec').hidden = !data.similar.length;
+  $('#similar').innerHTML = data.similar.map(s => `<li><a href="/k/${encodeURIComponent(s.slug)}">${esc(s.title)}</a></li>`).join('');
+  $('#othersec').hidden = !c.otherSections.trim(); $('#other').innerHTML = md(c.otherSections);
+  $('#titles').innerHTML = all.filter(x => x.slug !== c.slug).map(x => `<option value="${esc(x.slug)}">${esc(x.title)}</option>`).join('');
+  $('#cp').hidden = false;
+}
+async function load() {
+  const r = await fetch(url);
+  if (!r.ok) { $('#err').textContent = 'No such concept.'; $('#cp').hidden = true; return; }
+  data = await r.json();
+  try { all = (await (await fetch('/api/knowledge')).json()).concepts; } catch { all = []; }
+  render();
+}
+$('#status').onchange = e => patch({ status: e.target.value });
+$('#savewords').onclick = async () => { const r = await patch({ inMyWords: $('#words').value }); if (r) $('#wordsmsg').textContent = 'saved'; };
+$('#sources').onclick = e => { const b = e.target.closest('.rm'); if (!b) return; const s = data.concept.sources[Number(b.dataset.i)]; patch({ removeSource: { folder: s.folder, t: s.t } }); };
+$('#reladd').onclick = () => {
+  const raw = $('#reltarget').value.trim().toLowerCase();
+  const hit = all.find(c => c.slug === raw || c.title.toLowerCase() === raw);
+  const to = hit ? hit.slug : raw.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!to) return; patch({ addRelated: { type: $('#reltype').value, to } }).then(() => { $('#reltarget').value = ''; });
+};
+let armed = false;
+$('#delete').onclick = async () => {
+  if (!armed) { armed = true; $('#delete').textContent = 'Click again to confirm'; setTimeout(() => { armed = false; $('#delete').textContent = 'Delete'; }, 4000); return; }
+  const r = await send('DELETE');
+  if (r.ok) location.href = '/knowledge'; else alert('delete failed');
+};
+load();
+</script></body></html>

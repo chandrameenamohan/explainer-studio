@@ -1,0 +1,8 @@
+node_modules/
+state/
+videos/*
+!videos/.gitkeep
+knowledge/
+.test-tmp/
+.DS_Store
+examples/*/stills/
